@@ -11,13 +11,15 @@
     <link rel="apple-touch-icon" href="icon.png">
     <title>TreffSyn - Live Treffen synchronisieren</title>
     <link rel="stylesheet" href="index.css">
+    <link rel="stylesheet" href="https://cdn-uicons.flaticon.com/2.1.0/uicons-regular-rounded/css/uicons-regular-rounded.css">
+    <link rel="stylesheet" href="https://cdn-uicons.flaticon.com/2.1.0/uicons-regular-straight/css/uicons-regular-straight.css">
 </head>
 <body>
-    <div class="sync-indicator" id="sync-indicator">🔄 Synchronisiert...</div>
+    <div class="sync-indicator" id="sync-indicator"><i class="fi fi-ss-file-recycle"></i> Synchronisiert...</div>
 
     <div id="login-container" class="login-screen hidden">
         <div class="login-card">
-            <h1 class="login-title">🔄 TreffSyn</h1>
+            <h1 class="login-title"><i class="fi fi-ss-file-recycle"></i> TreffSyn</h1>
             <p class="login-subtitle">Synchronisiere Treffen mit Freunden</p>
 
             <label class="input-label">Dein Name</label>
@@ -113,19 +115,19 @@
 
         <nav class="bottom-nav">
             <button class="nav-item" onclick="switchScreen('groups')">
-                <span style="font-size: 24px;">👥</span>
+                <span style="font-size: 24px;"><i class="fi fi-rs-users"></i></span>
                 <span>Gruppen</span>
             </button>
             <button class="nav-item active" onclick="switchScreen('calendar')">
-                <span style="font-size: 24px;">📅</span>
+                <span style="font-size: 24px;"><i class="fi fi-rs-calendar"></i></span>
                 <span>Kalender</span>
             </button>
             <button class="nav-item" onclick="switchScreen('plan')">
-                <span style="font-size: 24px;">📋</span>
+                <span style="font-size: 24px;"><i class="fi fi-rs-clipboard-list-check"></i></span>
                 <span>Plan</span>
             </button>
             <button class="nav-item" onclick="switchScreen('profile')">
-                <span style="font-size: 24px;">👤</span>
+                <span style="font-size: 24px;"><i class="fi fi-rs-user"></i></span>
                 <span>Profil</span>
             </button>
         </nav>
