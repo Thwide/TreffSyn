@@ -825,6 +825,33 @@
             margin-bottom: 32px;
         }
 
+        .login-error {
+            color: var(--danger);
+            font-size: 14px;
+            margin: 0 0 12px;
+            text-align: center;
+        }
+
+        .login-hint {
+            color: var(--text-secondary);
+            font-size: 12px;
+            text-align: center;
+            margin-top: 12px;
+            line-height: 1.4;
+        }
+
+        .meeting-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 8px;
+        }
+
+        .meeting-item-header h3 {
+            margin: 0;
+            flex: 1;
+        }
+
         .day-type-selector {
             display: flex;
             flex-wrap: wrap;
@@ -964,9 +991,17 @@
             <p class="login-subtitle">Synchronisiere Treffen mit Freunden</p>
 
             <label class="input-label">Dein Name</label>
-            <input type="text" id="login-name" class="input" placeholder="Wie heißt du?" autofocus>
+            <input type="text" id="login-name" class="input" placeholder="Wie heißt du?" autofocus autocomplete="username"
+                   onkeydown="if(event.key==='Enter')document.getElementById('login-password').focus()">
 
-            <button class="btn btn-primary" style="width: 100%;" onclick="login()">Los geht's</button>
+            <label class="input-label">Passwort</label>
+            <input type="password" id="login-password" class="input" placeholder="Passwort" autocomplete="current-password"
+                   onkeydown="if(event.key==='Enter')login()">
+
+            <p id="login-error" class="login-error hidden"></p>
+
+            <button class="btn btn-primary" style="width: 100%;" onclick="login()">Anmelden / Registrieren</button>
+            <p class="login-hint">Bekannte Kombination → Login. Neu → Account wird angelegt.</p>
         </div>
     </div>
 
@@ -1152,12 +1187,41 @@
             }
 
             // User operations
-            async createUser(name) {
+            async hashPassword(password) {
+                const data = new TextEncoder().encode(password);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                return Array.from(new Uint8Array(hashBuffer))
+                    .map(b => b.toString(16).padStart(2, '0'))
+                    .join('');
+            }
+
+            async findUserByCredentials(name, password) {
+                await this.waitForFirebase();
+                const passwordHash = await this.hashPassword(password);
+                const users = await this.getAllUsers();
+                return Object.values(users).find(u =>
+                    u.name === name && u.passwordHash === passwordHash
+                ) || null;
+            }
+
+            async loginOrRegister(name, password) {
+                const existing = await this.findUserByCredentials(name, password);
+                if (existing) {
+                    this.showSync('synced', '✓ Willkommen zurück');
+                    return existing.id;
+                }
+                return this.createUser(name, password);
+            }
+
+            async createUser(name, password) {
                 await this.waitForFirebase();
                 const userId = 'user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+                const passwordHash = await this.hashPassword(password);
                 const userData = {
                     id: userId,
                     name: name,
+                    passwordHash,
+                    darkMode: false,
                     createdAt: new Date().toISOString()
                 };
 
@@ -1404,18 +1468,24 @@
                     time,
                     createdBy: creatorId,
                     createdAt: now,
-                    responses: {
-                        [creatorId]: {
-                            status: 'accepted',
-                            comment: '',
-                            updatedAt: now
-                        }
-                    }
+                    responses: {}
                 };
 
                 await window.firebase.set(window.firebase.ref(this.db, 'meetings/' + meetingId), meetingData);
                 this.showSync('synced', '✓ Treffen geplant');
                 return meetingId;
+            }
+
+            async deleteMeeting(meetingId, userId) {
+                await this.waitForFirebase();
+                const snapshot = await window.firebase.get(window.firebase.ref(this.db, 'meetings/' + meetingId));
+                if (!snapshot.exists()) return { ok: false, error: 'not_found' };
+                const meeting = snapshot.val();
+                if (meeting.createdBy !== userId) return { ok: false, error: 'no_permission' };
+
+                await window.firebase.remove(window.firebase.ref(this.db, 'meetings/' + meetingId));
+                this.showSync('synced', '✓ Treffen gelöscht');
+                return { ok: true };
             }
 
             async respondToMeeting(meetingId, userId, status, comment) {
@@ -1502,15 +1572,24 @@
             currentDate: new Date(),
             calendarFilter: 'mine',
             calendarView: 'day',
-            selectedGroupId: null
+            selectedGroupId: null,
+            listenersReady: false
         };
 
         // Login
         async function login() {
             const name = document.getElementById('login-name').value.trim();
-            if (!name) return;
+            const password = document.getElementById('login-password').value;
+            const errorEl = document.getElementById('login-error');
 
-            appState.currentUser = await db.createUser(name);
+            if (!name || !password) {
+                errorEl.textContent = 'Bitte Name und Passwort eingeben.';
+                errorEl.classList.remove('hidden');
+                return;
+            }
+
+            errorEl.classList.add('hidden');
+            appState.currentUser = await db.loginOrRegister(name, password);
             localStorage.setItem('treffsyn-current-user-id', appState.currentUser);
 
             showApp();
@@ -1520,52 +1599,54 @@
             document.getElementById('login-container').classList.add('hidden');
             document.getElementById('app-container').classList.remove('hidden');
             loadUserData();
+
+            // Setup real-time listeners once
+            if (!appState.listenersReady) {
+                appState.listenersReady = true;
+                db.listenToGroups(() => {
+                    if (!document.getElementById('groups-screen').classList.contains('hidden')) {
+                        renderGroups();
+                    }
+                });
+                db.listenToMeetings(() => {
+                    if (!document.getElementById('plan-screen').classList.contains('hidden')) {
+                        renderMeetings();
+                    }
+                    if (!document.getElementById('calendar-screen').classList.contains('hidden')) {
+                        renderCalendar();
+                    }
+                });
+            }
+        }
+
+        function applyDarkMode(enabled) {
+            appState.settings.darkMode = !!enabled;
+            document.body.classList.toggle('dark', appState.settings.darkMode);
+            document.getElementById('dark-mode-toggle').textContent = appState.settings.darkMode ? '☀️' : '🌙';
         }
 
         async function loadUserData() {
             const user = await db.getUser(appState.currentUser);
             if (user) {
-                document.getElementById('user-name').value = user.name;
+                document.getElementById('user-name').value = user.name || '';
+                applyDarkMode(!!user.darkMode);
             }
             renderCalendar();
         }
 
         // Load data
         async function loadData() {
+            await db.waitForFirebase();
             const userId = localStorage.getItem('treffsyn-current-user-id');
             if (userId) {
                 const user = await db.getUser(userId);
                 if (user) {
                     appState.currentUser = userId;
                     showApp();
-
-                    // Setup real-time listeners
-                    db.listenToGroups((groups) => {
-                        if (!document.getElementById('groups-screen').classList.contains('hidden')) {
-                            renderGroups();
-                        }
-                    });
-
-                    db.listenToMeetings((meetings) => {
-                        if (!document.getElementById('plan-screen').classList.contains('hidden')) {
-                            renderMeetings();
-                        }
-                        if (!document.getElementById('calendar-screen').classList.contains('hidden')) {
-                            renderCalendar();
-                        }
-                    });
-
                     return;
                 }
             }
             document.getElementById('login-container').classList.remove('hidden');
-
-            const darkMode = localStorage.getItem('treffsyn-dark-mode') === 'true';
-            if (darkMode) {
-                appState.settings.darkMode = true;
-                document.body.classList.add('dark');
-                document.getElementById('dark-mode-toggle').textContent = '☀️';
-            }
         }
 
         // Screen switching
@@ -1583,11 +1664,11 @@
         }
 
         // Dark Mode
-        document.getElementById('dark-mode-toggle').addEventListener('click', () => {
-            appState.settings.darkMode = !appState.settings.darkMode;
-            document.body.classList.toggle('dark', appState.settings.darkMode);
-            document.getElementById('dark-mode-toggle').textContent = appState.settings.darkMode ? '☀️' : '🌙';
-            localStorage.setItem('treffsyn-dark-mode', appState.settings.darkMode);
+        document.getElementById('dark-mode-toggle').addEventListener('click', async () => {
+            applyDarkMode(!appState.settings.darkMode);
+            if (appState.currentUser) {
+                await db.updateUser(appState.currentUser, { darkMode: appState.settings.darkMode });
+            }
         });
 
         // Name ändern
@@ -2219,6 +2300,19 @@
             renderMeetings();
         }
 
+        async function deleteMeeting(meetingId) {
+            if (!confirm('Dieses Treffen wirklich löschen?')) return;
+            const result = await db.deleteMeeting(meetingId, appState.currentUser);
+            if (!result.ok) {
+                alert(result.error === 'no_permission'
+                    ? 'Nur der Terminersteller kann dieses Treffen löschen.'
+                    : 'Treffen konnte nicht gelöscht werden.');
+                return;
+            }
+            renderMeetings();
+            renderCalendar();
+        }
+
         async function renderMeetings() {
             const list = document.getElementById('meetings-list');
             const userMeetings = await db.getUserMeetings(appState.currentUser);
@@ -2239,6 +2333,7 @@
                     const declined = members.filter(id => responses[id]?.status === 'declined').length;
                     const pending = Math.max(0, members.length - accepted - declined);
                     const myResponse = responses[appState.currentUser];
+                    const isCreator = meeting.createdBy === appState.currentUser;
 
                     const responseListHtml = members.map(userId => {
                         const name = allUsers[userId]?.name || 'Unbekannt';
@@ -2256,11 +2351,18 @@
 
                     const myStatusHtml = myResponse
                         ? `<div class="meeting-my-status ${myResponse.status}">Deine Antwort: ${myResponse.status === 'accepted' ? 'Zugesagt' : 'Abgesagt'}${myResponse.comment ? ' — ' + myResponse.comment.replace(/</g, '&lt;').replace(/>/g, '&gt;') : ''}</div>`
+                        : '<div class="meeting-my-status">Deine Antwort: offen</div>';
+
+                    const deleteBtn = isCreator
+                        ? `<button class="delete-btn" title="Treffen löschen" onclick="deleteMeeting('${meeting.id}')">🗑️</button>`
                         : '';
 
                     return `
                         <div class="meeting-item">
-                            <h3>${meeting.activity}</h3>
+                            <div class="meeting-item-header">
+                                <h3>${meeting.activity}</h3>
+                                ${deleteBtn}
+                            </div>
                             <p style="color: var(--accent); font-weight: 600;">${group?.name || 'Unbekannte Gruppe'}</p>
                             <p>${new Date(meeting.date).toLocaleDateString('de-DE')} um ${meeting.time}</p>
                             <p class="meeting-responses-summary">${accepted} zugesagt · ${declined} abgesagt · ${pending} offen</p>
