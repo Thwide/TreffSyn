@@ -1027,6 +1027,10 @@
                     </div>
                     <div id="block-times-list"></div>
                 </div>
+
+                <div class="card">
+                    <button class="btn btn-danger" style="width: 100%;" onclick="logout()">Ausloggen</button>
+                </div>
             </div>
 
             <!-- Gruppen Screen -->
@@ -1593,6 +1597,25 @@
             localStorage.setItem('treffsyn-current-user-id', appState.currentUser);
 
             showApp();
+        }
+
+        function logout() {
+            localStorage.removeItem('treffsyn-current-user-id');
+            appState.currentUser = null;
+            applyDarkMode(false);
+
+            document.getElementById('app-container').classList.add('hidden');
+            document.getElementById('login-container').classList.remove('hidden');
+            document.getElementById('login-name').value = '';
+            document.getElementById('login-password').value = '';
+            document.getElementById('login-error').classList.add('hidden');
+            document.getElementById('user-name').value = '';
+
+            document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+            document.getElementById('calendar-screen').classList.remove('hidden');
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            const calendarNav = document.querySelector('.nav-item[onclick*="calendar"]');
+            if (calendarNav) calendarNav.classList.add('active');
         }
 
         function showApp() {
