@@ -701,6 +701,100 @@
             letter-spacing: 2px;
         }
 
+        .join-mode-selector {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .join-mode-option {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 12px;
+            border: 2px solid var(--border);
+            border-radius: 10px;
+            cursor: pointer;
+            background: var(--bg-secondary);
+        }
+
+        .join-mode-option:has(input:checked) {
+            border-color: var(--accent);
+            background: rgba(0, 122, 255, 0.08);
+        }
+
+        .join-mode-option input {
+            margin-top: 3px;
+        }
+
+        .join-mode-option strong {
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        .join-mode-option span {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .member-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .member-row:last-child {
+            border-bottom: none;
+        }
+
+        .member-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+        }
+
+        .member-badge {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+
+        .pending-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            background: var(--bg-secondary);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+
+        .pending-actions {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .group-meta-badge {
+            display: inline-block;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 6px;
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
         .login-screen {
             display: flex;
             align-items: center;
@@ -1105,7 +1199,33 @@
                 return code;
             }
 
-            async createGroup(name, creatorId) {
+            normalizeGroup(group) {
+                if (!group) return null;
+                const members = Array.isArray(group.members) ? group.members : [];
+                const admins = Array.isArray(group.admins) && group.admins.length
+                    ? group.admins
+                    : (group.createdBy ? [group.createdBy] : []);
+                return {
+                    ...group,
+                    members,
+                    admins,
+                    joinMode: group.joinMode === 'approval' ? 'approval' : 'open',
+                    pendingRequests: group.pendingRequests && typeof group.pendingRequests === 'object'
+                        ? group.pendingRequests
+                        : {}
+                };
+            }
+
+            isGroupAdmin(group, userId) {
+                const g = this.normalizeGroup(group);
+                return !!(g && g.admins.includes(userId));
+            }
+
+            async saveGroup(group) {
+                await window.firebase.set(window.firebase.ref(this.db, 'groups/' + group.id), group);
+            }
+
+            async createGroup(name, creatorId, joinMode = 'open') {
                 await this.waitForFirebase();
                 const groupId = 'group-' + Date.now();
                 const groupCode = this.generateGroupCode();
@@ -1114,11 +1234,14 @@
                     name: name,
                     code: groupCode,
                     members: [creatorId],
+                    admins: [creatorId],
+                    joinMode: joinMode === 'approval' ? 'approval' : 'open',
+                    pendingRequests: {},
                     createdBy: creatorId,
                     createdAt: new Date().toISOString()
                 };
 
-                await window.firebase.set(window.firebase.ref(this.db, 'groups/' + groupId), groupData);
+                await this.saveGroup(groupData);
                 this.showSync('synced', '✓ Gruppe erstellt');
                 return { groupId, groupCode };
             }
@@ -1128,19 +1251,139 @@
                 const groups = await this.getAllGroups();
                 const group = Object.values(groups).find(g => g.code === code);
 
-                if (group && !group.members.includes(userId)) {
-                    group.members.push(userId);
-                    await window.firebase.set(window.firebase.ref(this.db, 'groups/' + group.id), group);
-                    this.showSync('synced', '✓ Gruppe beigetreten');
-                    return group;
+                if (!group) {
+                    return { status: 'not_found' };
                 }
-                return null;
+
+                const g = this.normalizeGroup(group);
+
+                if (g.members.includes(userId)) {
+                    return { status: 'already_member', group: g };
+                }
+
+                if (g.pendingRequests[userId]) {
+                    return { status: 'pending', group: g };
+                }
+
+                if (g.joinMode === 'approval') {
+                    g.pendingRequests[userId] = { requestedAt: new Date().toISOString() };
+                    await this.saveGroup(g);
+                    this.showSync('synced', '✓ Beitrittsanfrage gesendet');
+                    return { status: 'pending', group: g };
+                }
+
+                g.members.push(userId);
+                await this.saveGroup(g);
+                this.showSync('synced', '✓ Gruppe beigetreten');
+                return { status: 'joined', group: g };
+            }
+
+            async approveJoinRequest(groupId, userId, adminId) {
+                await this.waitForFirebase();
+                const groups = await this.getAllGroups();
+                const g = this.normalizeGroup(groups[groupId]);
+                if (!g || !this.isGroupAdmin(g, adminId)) return false;
+                if (!g.pendingRequests[userId]) return false;
+
+                if (!g.members.includes(userId)) {
+                    g.members.push(userId);
+                }
+                delete g.pendingRequests[userId];
+                await this.saveGroup(g);
+                this.showSync('synced', '✓ Anfrage angenommen');
+                return true;
+            }
+
+            async rejectJoinRequest(groupId, userId, adminId) {
+                await this.waitForFirebase();
+                const groups = await this.getAllGroups();
+                const g = this.normalizeGroup(groups[groupId]);
+                if (!g || !this.isGroupAdmin(g, adminId)) return false;
+                if (!g.pendingRequests[userId]) return false;
+
+                delete g.pendingRequests[userId];
+                await this.saveGroup(g);
+                this.showSync('synced', '✓ Anfrage abgelehnt');
+                return true;
+            }
+
+            async updateGroupName(groupId, name, adminId) {
+                await this.waitForFirebase();
+                const groups = await this.getAllGroups();
+                const g = this.normalizeGroup(groups[groupId]);
+                if (!g || !this.isGroupAdmin(g, adminId) || !name) return false;
+
+                g.name = name.trim();
+                await this.saveGroup(g);
+                this.showSync('synced', '✓ Name geändert');
+                return true;
+            }
+
+            async updateJoinMode(groupId, joinMode, adminId) {
+                await this.waitForFirebase();
+                const groups = await this.getAllGroups();
+                const g = this.normalizeGroup(groups[groupId]);
+                if (!g || !this.isGroupAdmin(g, adminId)) return false;
+
+                g.joinMode = joinMode === 'approval' ? 'approval' : 'open';
+                await this.saveGroup(g);
+                this.showSync('synced', '✓ Beitrittsmodus geändert');
+                return true;
+            }
+
+            async removeMember(groupId, memberId, adminId) {
+                await this.waitForFirebase();
+                const groups = await this.getAllGroups();
+                const g = this.normalizeGroup(groups[groupId]);
+                if (!g || !this.isGroupAdmin(g, adminId)) return { ok: false, error: 'no_permission' };
+                if (!g.members.includes(memberId)) return { ok: false, error: 'not_member' };
+
+                const isTargetAdmin = g.admins.includes(memberId);
+                if (isTargetAdmin && g.admins.length <= 1) {
+                    return { ok: false, error: 'last_admin' };
+                }
+
+                g.members = g.members.filter(id => id !== memberId);
+                g.admins = g.admins.filter(id => id !== memberId);
+                if (g.pendingRequests[memberId]) delete g.pendingRequests[memberId];
+                await this.saveGroup(g);
+                this.showSync('synced', '✓ Mitglied entfernt');
+                return { ok: true };
+            }
+
+            async leaveGroup(groupId, userId) {
+                await this.waitForFirebase();
+                const groups = await this.getAllGroups();
+                const g = this.normalizeGroup(groups[groupId]);
+                if (!g || !g.members.includes(userId)) return { ok: false, error: 'not_member' };
+
+                const isAdmin = g.admins.includes(userId);
+                if (isAdmin && g.admins.length <= 1 && g.members.length > 1) {
+                    return { ok: false, error: 'last_admin' };
+                }
+
+                g.members = g.members.filter(id => id !== userId);
+                g.admins = g.admins.filter(id => id !== userId);
+                if (g.pendingRequests[userId]) delete g.pendingRequests[userId];
+
+                if (g.members.length === 0) {
+                    await window.firebase.remove(window.firebase.ref(this.db, 'groups/' + groupId));
+                } else {
+                    await this.saveGroup(g);
+                }
+                this.showSync('synced', '✓ Gruppe verlassen');
+                return { ok: true };
             }
 
             async getAllGroups() {
                 await this.waitForFirebase();
                 const snapshot = await window.firebase.get(window.firebase.ref(this.db, 'groups'));
-                return snapshot.exists() ? snapshot.val() : {};
+                const raw = snapshot.exists() ? snapshot.val() : {};
+                const normalized = {};
+                Object.keys(raw).forEach(id => {
+                    normalized[id] = this.normalizeGroup(raw[id]);
+                });
+                return normalized;
             }
 
             async getUserGroups(userId) {
@@ -1353,21 +1596,15 @@
             await db.updateUser(appState.currentUser, { name: newName });
         });
 
-        // Zeitformat-Helfer (System-Locale 12h/24h)
-        function uses12HourClock() {
-            return !!Intl.DateTimeFormat(undefined, { hour: 'numeric' }).resolvedOptions().hour12;
-        }
-
+        // Zeitformat-Helfer (durchgehend 24-Stunden-Format)
         function formatTimeForDisplay(hhmm) {
             if (!hhmm) return '';
             const [h, m] = hhmm.split(':').map(Number);
-            const d = new Date();
-            d.setHours(h, m || 0, 0, 0);
-            return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+            return `${String(h).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`;
         }
 
-        function buildMinuteOptions(selected = '00') {
-            let opts = '';
+        function buildMinuteOptions(selected = '00', placeholder = false) {
+            let opts = placeholder ? `<option value="" ${selected === '' ? 'selected' : ''}>--</option>` : '';
             for (let m = 0; m < 60; m += 5) {
                 const val = String(m).padStart(2, '0');
                 opts += `<option value="${val}" ${val === selected ? 'selected' : ''}>${val}</option>`;
@@ -1375,56 +1612,32 @@
             return opts;
         }
 
-        function buildTimeSelectHTML(prefix, defaultHour24, defaultMinute = '00') {
-            const minuteOpts = buildMinuteOptions(defaultMinute);
-            if (uses12HourClock()) {
-                let h12 = defaultHour24 % 12;
-                if (h12 === 0) h12 = 12;
-                const period = defaultHour24 >= 12 ? 'PM' : 'AM';
-                let hourOpts = '';
-                for (let h = 1; h <= 12; h++) {
-                    hourOpts += `<option value="${h}" ${h === h12 ? 'selected' : ''}>${h}</option>`;
-                }
-                return `
-                    <div class="time-select-row">
-                        <select id="${prefix}-hour" class="input time-select">${hourOpts}</select>
-                        <span>:</span>
-                        <select id="${prefix}-minute" class="input time-select">${minuteOpts}</select>
-                        <select id="${prefix}-period" class="input time-select">
-                            <option value="AM" ${period === 'AM' ? 'selected' : ''}>AM</option>
-                            <option value="PM" ${period === 'PM' ? 'selected' : ''}>PM</option>
-                        </select>
-                    </div>
-                `;
-            }
+        function buildTimeSelectHTML(prefix, defaultHour24, defaultMinute = '00', options = {}) {
+            const { onChange = '', placeholder = false } = options;
+            const changeAttr = onChange ? ` onchange="${onChange}"` : '';
+            const minuteOpts = buildMinuteOptions(defaultMinute, placeholder);
 
-            let hourOpts = '';
+            let hourOpts = placeholder ? `<option value="" ${defaultHour24 === null ? 'selected' : ''}>--</option>` : '';
             for (let h = 0; h < 24; h++) {
                 const val = String(h).padStart(2, '0');
                 hourOpts += `<option value="${val}" ${h === defaultHour24 ? 'selected' : ''}>${val}</option>`;
             }
+
             return `
                 <div class="time-select-row">
-                    <select id="${prefix}-hour" class="input time-select">${hourOpts}</select>
+                    <select id="${prefix}-hour" class="input time-select"${changeAttr}>${hourOpts}</select>
                     <span>:</span>
-                    <select id="${prefix}-minute" class="input time-select">${minuteOpts}</select>
+                    <select id="${prefix}-minute" class="input time-select"${changeAttr}>${minuteOpts}</select>
+                    <span class="time-select-suffix">Uhr</span>
                 </div>
             `;
         }
 
         function parseTimeInputsTo24h(prefix) {
-            const minute = document.getElementById(`${prefix}-minute`).value;
-            if (uses12HourClock()) {
-                let hour = parseInt(document.getElementById(`${prefix}-hour`).value, 10);
-                const period = document.getElementById(`${prefix}-period`).value;
-                if (period === 'AM') {
-                    if (hour === 12) hour = 0;
-                } else if (hour !== 12) {
-                    hour += 12;
-                }
-                return `${String(hour).padStart(2, '0')}:${minute}`;
-            }
-            return `${document.getElementById(`${prefix}-hour`).value}:${minute}`;
+            const hour = document.getElementById(`${prefix}-hour`)?.value;
+            const minute = document.getElementById(`${prefix}-minute`)?.value;
+            if (!hour || minute === '' || minute === undefined) return '';
+            return `${hour}:${minute}`;
         }
 
         const weekdayChipOrder = [
@@ -1583,6 +1796,23 @@
                         </div>
                         <label class="input-label">Gruppenname</label>
                         <input type="text" id="group-name-input" class="input" placeholder="z.B. Freunde, Familie">
+                        <label class="input-label">Beitritt</label>
+                        <div class="join-mode-selector">
+                            <label class="join-mode-option">
+                                <input type="radio" name="join-mode" value="open" checked>
+                                <div>
+                                    <strong>Sofort mit Code</strong>
+                                    <span>Jeder mit dem Code wird sofort Mitglied</span>
+                                </div>
+                            </label>
+                            <label class="join-mode-option">
+                                <input type="radio" name="join-mode" value="approval">
+                                <div>
+                                    <strong>Mit Bestätigung</strong>
+                                    <span>Code + Zustimmung eines Admins nötig</span>
+                                </div>
+                            </label>
+                        </div>
                         <button class="btn btn-primary" onclick="createGroup()">Erstellen</button>
                     </div>
                 </div>
@@ -1594,7 +1824,8 @@
             const name = document.getElementById('group-name-input').value;
             if (!name) return;
 
-            const { groupId, groupCode } = await db.createGroup(name, appState.currentUser);
+            const joinMode = document.querySelector('input[name="join-mode"]:checked')?.value || 'open';
+            const { groupId, groupCode } = await db.createGroup(name, appState.currentUser, joinMode);
 
             document.querySelector('.modal-overlay').remove();
             showGroupCodeModal(groupCode, name);
@@ -1647,15 +1878,23 @@
             const code = document.getElementById('join-group-code').value.toUpperCase();
             if (!code) return;
 
-            const group = await db.joinGroup(code, appState.currentUser);
+            const result = await db.joinGroup(code, appState.currentUser);
 
-            if (!group) {
+            if (!result || result.status === 'not_found') {
                 alert('❌ Gruppe nicht gefunden. Prüfe den Code.');
                 return;
             }
 
             document.querySelector('.modal-overlay').remove();
-            alert(`✓ Du bist der Gruppe "${group.name}" beigetreten!`);
+
+            if (result.status === 'already_member') {
+                alert(`Du bist bereits Mitglied von "${result.group.name}".`);
+            } else if (result.status === 'pending') {
+                alert(`📩 Anfrage gesendet. Ein Admin von "${result.group.name}" muss dich noch bestätigen.`);
+            } else if (result.status === 'joined') {
+                alert(`✓ Du bist der Gruppe "${result.group.name}" beigetreten!`);
+            }
+
             renderGroups();
         }
 
@@ -1673,10 +1912,16 @@
                 const memberNames = group.members
                     .map(userId => allUsers[userId]?.name || 'Unbekannt')
                     .join(', ');
+                const isAdmin = db.isGroupAdmin(group, appState.currentUser);
+                const pendingCount = Object.keys(group.pendingRequests || {}).length;
+                const modeLabel = group.joinMode === 'approval' ? 'Mit Bestätigung' : 'Sofort mit Code';
+                const adminBadge = isAdmin ? ' · Admin' : '';
+                const pendingBadge = isAdmin && pendingCount > 0 ? ` · ${pendingCount} Anfrage${pendingCount > 1 ? 'n' : ''}` : '';
 
                 return `
                     <div class="group-card" onclick="showGroupDetails('${group.id}')">
                         <h3>${group.name}</h3>
+                        <span class="group-meta-badge">${modeLabel}${adminBadge}${pendingBadge}</span>
                         <p style="color: var(--text-secondary); margin: 8px 0;">Code: <span style="font-family: monospace; color: var(--accent); font-weight: 700;">${group.code}</span></p>
                         <p style="font-size: 14px; color: var(--text-secondary);">${memberNames}</p>
                     </div>
@@ -1690,9 +1935,53 @@
             if (!group) return;
 
             const allUsers = await db.getAllUsers();
-            const memberNames = group.members.map(userId =>
-                allUsers[userId]?.name || 'Unbekannt'
-            ).join(', ');
+            const isAdmin = db.isGroupAdmin(group, appState.currentUser);
+            const pendingIds = Object.keys(group.pendingRequests || {});
+            const modeLabel = group.joinMode === 'approval' ? 'Mit Bestätigung' : 'Sofort mit Code';
+
+            const membersHtml = group.members.map(userId => {
+                const name = allUsers[userId]?.name || 'Unbekannt';
+                const memberIsAdmin = group.admins.includes(userId);
+                const canRemove = isAdmin && userId !== appState.currentUser && !(memberIsAdmin && group.admins.length <= 1);
+                return `
+                    <div class="member-row">
+                        <div class="member-info">
+                            <span>${name}</span>
+                            ${memberIsAdmin ? '<span class="member-badge">Admin</span>' : ''}
+                        </div>
+                        ${canRemove ? `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); removeGroupMember('${group.id}', '${userId}')">Entfernen</button>` : ''}
+                    </div>
+                `;
+            }).join('');
+
+            const pendingHtml = isAdmin && pendingIds.length > 0 ? `
+                <p style="color: var(--text-secondary); margin: 16px 0 8px;">Offene Anfragen (${pendingIds.length}):</p>
+                ${pendingIds.map(userId => {
+                    const name = allUsers[userId]?.name || 'Unbekannt';
+                    return `
+                        <div class="pending-row">
+                            <span>${name}</span>
+                            <div class="pending-actions">
+                                <button class="btn btn-success btn-sm" onclick="approveJoinRequest('${group.id}', '${userId}')">Annehmen</button>
+                                <button class="btn btn-danger btn-sm" onclick="rejectJoinRequest('${group.id}', '${userId}')">Ablehnen</button>
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
+            ` : '';
+
+            const adminControls = isAdmin ? `
+                <label class="input-label">Gruppenname</label>
+                <input type="text" id="edit-group-name" class="input" value="${group.name.replace(/"/g, '&quot;')}">
+                <button class="btn btn-secondary" style="width: 100%; margin-bottom: 16px;" onclick="saveGroupName('${group.id}')">Name speichern</button>
+                <label class="input-label">Beitrittsmodus</label>
+                <select id="edit-join-mode" class="select" onchange="saveJoinMode('${group.id}', this.value)">
+                    <option value="open" ${group.joinMode === 'open' ? 'selected' : ''}>Sofort mit Code</option>
+                    <option value="approval" ${group.joinMode === 'approval' ? 'selected' : ''}>Code + Admin-Zustimmung</option>
+                </select>
+            ` : `
+                <p style="color: var(--text-secondary); margin-bottom: 12px;">Beitritt: ${modeLabel}</p>
+            `;
 
             const html = `
                 <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
@@ -1701,15 +1990,95 @@
                             <h3 class="modal-title">${group.name}</h3>
                             <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
                         </div>
+                        ${adminControls}
                         <p style="color: var(--text-secondary); margin-bottom: 8px;">Gruppen-Code:</p>
                         <div class="group-code">${group.code}</div>
                         <button class="btn btn-secondary" style="width: 100%; margin-bottom: 16px;" onclick="copyGroupCode('${group.code}')">📋 Code kopieren</button>
-                        <p style="color: var(--text-secondary); margin-bottom: 8px;">Mitglieder (${group.members.length}):</p>
-                        <p style="margin-bottom: 16px;">${memberNames}</p>
+                        ${pendingHtml}
+                        <p style="color: var(--text-secondary); margin: 16px 0 8px;">Mitglieder (${group.members.length}):</p>
+                        <div style="margin-bottom: 16px;">${membersHtml}</div>
+                        <button class="btn btn-danger" style="width: 100%;" onclick="leaveGroup('${group.id}')">Gruppe verlassen</button>
                     </div>
                 </div>
             `;
             document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        async function saveGroupName(groupId) {
+            const name = document.getElementById('edit-group-name')?.value?.trim();
+            if (!name) return;
+            const ok = await db.updateGroupName(groupId, name, appState.currentUser);
+            if (!ok) {
+                alert('Name konnte nicht geändert werden.');
+                return;
+            }
+            document.querySelector('.modal-overlay')?.remove();
+            await renderGroups();
+            showGroupDetails(groupId);
+        }
+
+        async function saveJoinMode(groupId, joinMode) {
+            const ok = await db.updateJoinMode(groupId, joinMode, appState.currentUser);
+            if (!ok) {
+                alert('Beitrittsmodus konnte nicht geändert werden.');
+                return;
+            }
+            document.querySelector('.modal-overlay')?.remove();
+            await renderGroups();
+            showGroupDetails(groupId);
+        }
+
+        async function approveJoinRequest(groupId, userId) {
+            const ok = await db.approveJoinRequest(groupId, userId, appState.currentUser);
+            if (!ok) {
+                alert('Anfrage konnte nicht angenommen werden.');
+                return;
+            }
+            document.querySelector('.modal-overlay')?.remove();
+            await renderGroups();
+            showGroupDetails(groupId);
+        }
+
+        async function rejectJoinRequest(groupId, userId) {
+            const ok = await db.rejectJoinRequest(groupId, userId, appState.currentUser);
+            if (!ok) {
+                alert('Anfrage konnte nicht abgelehnt werden.');
+                return;
+            }
+            document.querySelector('.modal-overlay')?.remove();
+            await renderGroups();
+            showGroupDetails(groupId);
+        }
+
+        async function removeGroupMember(groupId, memberId) {
+            if (!confirm('Mitglied wirklich entfernen?')) return;
+            const result = await db.removeMember(groupId, memberId, appState.currentUser);
+            if (!result.ok) {
+                if (result.error === 'last_admin') {
+                    alert('Der letzte Admin kann nicht entfernt werden.');
+                } else {
+                    alert('Mitglied konnte nicht entfernt werden.');
+                }
+                return;
+            }
+            document.querySelector('.modal-overlay')?.remove();
+            await renderGroups();
+            showGroupDetails(groupId);
+        }
+
+        async function leaveGroup(groupId) {
+            if (!confirm('Gruppe wirklich verlassen?')) return;
+            const result = await db.leaveGroup(groupId, appState.currentUser);
+            if (!result.ok) {
+                if (result.error === 'last_admin') {
+                    alert('Du bist der letzte Admin. Entferne zuerst die anderen Mitglieder, bevor du austrittst.');
+                } else {
+                    alert('Gruppe konnte nicht verlassen werden.');
+                }
+                return;
+            }
+            document.querySelector('.modal-overlay')?.remove();
+            renderGroups();
         }
 
         // Meetings
@@ -1745,7 +2114,7 @@
 
             const groupId = document.getElementById('meeting-group')?.value;
             const date = document.getElementById('meeting-date')?.value;
-            const time = document.getElementById('meeting-time')?.value;
+            const time = parseTimeInputsTo24h('meeting-time');
 
             if (!groupId || !date || !time) {
                 preview.className = 'availability-preview';
@@ -1814,7 +2183,7 @@
                             <label class="input-label">Datum</label>
                             <input type="date" id="meeting-date" class="input" min="${today}" onchange="updateMeetingAvailabilityPreview()">
                             <label class="input-label">Uhrzeit</label>
-                            <input type="time" id="meeting-time" class="input" onchange="updateMeetingAvailabilityPreview()" oninput="updateMeetingAvailabilityPreview()">
+                            ${buildTimeSelectHTML('meeting-time', null, '', { onChange: 'updateMeetingAvailabilityPreview()', placeholder: true })}
                             <div id="meeting-availability" class="availability-preview">Datum und Uhrzeit wählen, um Verfügbarkeit zu prüfen</div>
                             <button class="btn btn-primary" onclick="createMeeting()">Erstellen</button>
                         </div>
@@ -1832,7 +2201,7 @@
             const groupId = document.getElementById('meeting-group').value;
             const activity = document.getElementById('meeting-activity').value;
             const date = document.getElementById('meeting-date').value;
-            const time = document.getElementById('meeting-time').value;
+            const time = parseTimeInputsTo24h('meeting-time');
 
             if (!activity || !date || !time) return;
 
