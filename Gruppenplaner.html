@@ -1,0 +1,1246 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#007AFF">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Gruppenplaner">
+    <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiR3J1cHBlbnBsYW5lciIsInNob3J0X25hbWUiOiJHcnVwcGVuIiwic3RhcnRfdXJsIjoiLiIsImRpc3BsYXkiOiJzdGFuZGFsb25lIiwiYmFja2dyb3VuZF9jb2xvciI6IiNmZmZmZmYiLCJ0aGVtZV9jb2xvciI6IiMwMDdBRkYifQ==">
+    <title>Gruppenplaner - Treffen mit Freunden planen</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f5f5f5;
+            --bg-tertiary: #e8e8e8;
+            --text-primary: #000000;
+            --text-secondary: #666666;
+            --accent: #007AFF;
+            --accent-hover: #0051D5;
+            --border: #d1d1d1;
+            --card-bg: #ffffff;
+            --input-bg: #f5f5f5;
+            --success: #34C759;
+            --warning: #FF9500;
+            --danger: #FF3B30;
+        }
+
+        body.dark {
+            --bg-primary: #000000;
+            --bg-secondary: #1c1c1e;
+            --bg-tertiary: #2c2c2e;
+            --text-primary: #ffffff;
+            --text-secondary: #98989d;
+            --accent: #0A84FF;
+            --accent-hover: #409CFF;
+            --border: #38383a;
+            --card-bg: #1c1c1e;
+            --input-bg: #2c2c2e;
+            --success: #30D158;
+            --warning: #FF9F0A;
+            --danger: #FF453A;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .app {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        .main-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            padding-bottom: 100px;
+        }
+
+        .screen {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .screen-title {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 24px;
+        }
+
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            background-color: var(--bg-secondary);
+            border-top: 1px solid var(--border);
+            padding: 8px 0;
+            z-index: 100;
+        }
+
+        .nav-item {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            padding: 8px;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: color 0.2s;
+            font-size: 12px;
+        }
+
+        .nav-item:hover {
+            color: var(--text-primary);
+        }
+
+        .nav-item.active {
+            color: var(--accent);
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border-radius: 8px;
+            border: none;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            justify-content: center;
+        }
+
+        .btn-primary {
+            background-color: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--accent-hover);
+        }
+
+        .btn-secondary {
+            background-color: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .btn-sm {
+            padding: 8px 16px;
+            font-size: 14px;
+        }
+
+        .input, .select {
+            width: 100%;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background-color: var(--input-bg);
+            color: var(--text-primary);
+            font-size: 16px;
+            margin-bottom: 12px;
+        }
+
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+        }
+
+        .modal {
+            background-color: var(--card-bg);
+            border-radius: 16px;
+            padding: 24px;
+            max-width: 500px;
+            width: 100%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-title {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 24px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .group-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .group-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+
+        .setting-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 0;
+            border-top: 1px solid var(--border);
+        }
+
+        .toggle-btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background-color: var(--bg-tertiary);
+            color: var(--text-primary);
+            cursor: pointer;
+        }
+
+        .input-label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+        }
+
+        .meeting-item {
+            padding: 16px;
+            background-color: var(--bg-secondary);
+            border-radius: 12px;
+            margin-bottom: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .btn-success {
+            background-color: var(--success);
+            color: white;
+        }
+
+        .btn-danger {
+            background-color: var(--danger);
+            color: white;
+        }
+
+        .screen-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .calendar-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .calendar-title {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .icon-btn {
+            background: none;
+            border: none;
+            color: var(--text-primary);
+            cursor: pointer;
+            padding: 8px;
+            font-size: 24px;
+        }
+
+        .block-time-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            background-color: var(--bg-secondary);
+            border-radius: 8px;
+            margin-bottom: 8px;
+        }
+
+        .block-time-info {
+            flex: 1;
+        }
+
+        .block-time-title {
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .block-time-details {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .delete-btn {
+            padding: 6px 12px;
+            background-color: var(--danger);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .timeline {
+            margin-top: 20px;
+        }
+
+        .timeline-hour {
+            display: flex;
+            min-height: 60px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .hour-label {
+            width: 80px;
+            padding: 8px;
+            font-size: 14px;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .hour-events {
+            flex: 1;
+            padding: 4px;
+        }
+
+        .event-block {
+            background-color: var(--accent);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 13px;
+            margin-bottom: 4px;
+        }
+
+        .event-block.blocktime {
+            background-color: var(--warning);
+        }
+
+        .event-block.meeting {
+            background-color: var(--success);
+        }
+
+        .group-code {
+            font-family: monospace;
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--accent);
+            text-align: center;
+            padding: 16px;
+            background-color: var(--bg-secondary);
+            border-radius: 8px;
+            margin: 16px 0;
+            letter-spacing: 2px;
+        }
+
+        .login-screen {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .login-card {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 32px;
+            max-width: 400px;
+            width: 100%;
+        }
+
+        .login-title {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+
+        .login-subtitle {
+            color: var(--text-secondary);
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .day-type-selector {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .day-type-btn {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid var(--border);
+            background: none;
+            border-radius: 8px;
+            cursor: pointer;
+            color: var(--text-primary);
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .day-type-btn.active {
+            border-color: var(--accent);
+            background-color: var(--accent);
+            color: white;
+        }
+
+        .activity-suggestions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .activity-chip {
+            padding: 8px 16px;
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .activity-chip:hover {
+            background-color: var(--accent);
+            color: white;
+            border-color: var(--accent);
+        }
+
+        .sync-indicator {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 8px 12px;
+            background-color: var(--success);
+            color: white;
+            border-radius: 20px;
+            font-size: 12px;
+            z-index: 1000;
+            display: none;
+        }
+
+        .sync-indicator.syncing {
+            display: block;
+            background-color: var(--warning);
+        }
+
+        .sync-indicator.error {
+            display: block;
+            background-color: var(--danger);
+        }
+    </style>
+</head>
+<body>
+    <div class="sync-indicator" id="sync-indicator">🔄 Synchronisiert...</div>
+
+    <div id="login-container" class="login-screen hidden">
+        <div class="login-card">
+            <h1 class="login-title">👥 Gruppenplaner</h1>
+            <p class="login-subtitle">Treffen mit Freunden einfach planen</p>
+
+            <label class="input-label">Dein Name</label>
+            <input type="text" id="login-name" class="input" placeholder="Wie heißt du?" autofocus>
+
+            <button class="btn btn-primary" style="width: 100%;" onclick="login()">Los geht's</button>
+        </div>
+    </div>
+
+    <div id="app-container" class="app hidden">
+        <main class="main-content">
+            <!-- Profil Screen -->
+            <div id="profile-screen" class="screen hidden">
+                <h1 class="screen-title">Profil</h1>
+                <div class="card">
+                    <h2 class="card-title">Persönliche Einstellungen</h2>
+                    <label class="input-label">Name</label>
+                    <input type="text" id="user-name" class="input" placeholder="Dein Name">
+                    <div class="setting-row">
+                        <span>Dunkelmodus</span>
+                        <button class="toggle-btn" id="dark-mode-toggle">🌙</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Blockzeiten</h2>
+                        <button class="btn btn-primary btn-sm" onclick="showAddBlockTimeModal()">+ Hinzufügen</button>
+                    </div>
+                    <div id="block-times-list"></div>
+                </div>
+            </div>
+
+            <!-- Gruppen Screen -->
+            <div id="groups-screen" class="screen hidden">
+                <div class="screen-header">
+                    <h1 class="screen-title">Gruppen</h1>
+                    <button class="btn btn-primary" onclick="showCreateGroupModal()">+ Erstellen</button>
+                </div>
+                <div style="margin-bottom: 16px;">
+                    <button class="btn btn-secondary" style="width: 100%;" onclick="showJoinGroupModal()">🔑 Gruppe beitreten</button>
+                </div>
+                <div id="groups-list"></div>
+            </div>
+
+            <!-- Kalender Screen -->
+            <div id="calendar-screen" class="screen">
+                <div class="calendar-header">
+                    <button class="icon-btn" onclick="changeDay(-1)">‹</button>
+                    <div class="calendar-title" id="calendar-title">Heute</div>
+                    <button class="icon-btn" onclick="changeDay(1)">›</button>
+                </div>
+                <div id="calendar-content"></div>
+            </div>
+
+            <!-- Plan Screen -->
+            <div id="plan-screen" class="screen hidden">
+                <div class="screen-header">
+                    <h1 class="screen-title">Plan</h1>
+                    <button class="btn btn-primary" onclick="showCreateMeetingModal()">+ Treffen planen</button>
+                </div>
+                <div id="meetings-list"></div>
+            </div>
+        </main>
+
+        <nav class="bottom-nav">
+            <button class="nav-item" onclick="switchScreen('groups')">
+                <span style="font-size: 24px;">👥</span>
+                <span>Gruppen</span>
+            </button>
+            <button class="nav-item active" onclick="switchScreen('calendar')">
+                <span style="font-size: 24px;">📅</span>
+                <span>Kalender</span>
+            </button>
+            <button class="nav-item" onclick="switchScreen('plan')">
+                <span style="font-size: 24px;">📋</span>
+                <span>Plan</span>
+            </button>
+            <button class="nav-item" onclick="switchScreen('profile')">
+                <span style="font-size: 24px;">👤</span>
+                <span>Profil</span>
+            </button>
+        </nav>
+    </div>
+
+    <script>
+        // Simulated Server/Database Layer
+        class DatabaseService {
+            constructor() {
+                this.storage = this.loadFromStorage();
+                this.syncCallbacks = [];
+            }
+
+            loadFromStorage() {
+                const data = localStorage.getItem('gruppenplaner-db');
+                if (data) {
+                    return JSON.parse(data);
+                }
+                return {
+                    users: {},
+                    groups: {},
+                    meetings: {},
+                    blockTimes: {}
+                };
+            }
+
+            save() {
+                localStorage.setItem('gruppenplaner-db', JSON.stringify(this.storage));
+                this.notifySync();
+            }
+
+            notifySync() {
+                this.syncCallbacks.forEach(cb => cb());
+                this.showSyncIndicator();
+            }
+
+            showSyncIndicator() {
+                const indicator = document.getElementById('sync-indicator');
+                indicator.className = 'sync-indicator syncing';
+                setTimeout(() => {
+                    indicator.style.display = 'none';
+                }, 1000);
+            }
+
+            onSync(callback) {
+                this.syncCallbacks.push(callback);
+            }
+
+            // User operations
+            createUser(name) {
+                const userId = 'user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+                this.storage.users[userId] = {
+                    id: userId,
+                    name: name,
+                    createdAt: new Date().toISOString()
+                };
+                this.save();
+                return userId;
+            }
+
+            updateUser(userId, updates) {
+                if (this.storage.users[userId]) {
+                    Object.assign(this.storage.users[userId], updates);
+                    this.save();
+                }
+            }
+
+            getUser(userId) {
+                return this.storage.users[userId];
+            }
+
+            // Group operations
+            createGroup(name, creatorId) {
+                const groupId = 'group-' + Date.now();
+                const groupCode = this.generateGroupCode();
+                this.storage.groups[groupId] = {
+                    id: groupId,
+                    name: name,
+                    code: groupCode,
+                    members: [creatorId],
+                    createdBy: creatorId,
+                    createdAt: new Date().toISOString()
+                };
+                this.save();
+                return { groupId, groupCode };
+            }
+
+            generateGroupCode() {
+                const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+                let code = '';
+                for (let i = 0; i < 6; i++) {
+                    code += chars.charAt(Math.floor(Math.random() * chars.length));
+                }
+                // Check if code exists
+                const exists = Object.values(this.storage.groups).some(g => g.code === code);
+                return exists ? this.generateGroupCode() : code;
+            }
+
+            joinGroup(code, userId) {
+                const group = Object.values(this.storage.groups).find(g => g.code === code);
+                if (group && !group.members.includes(userId)) {
+                    group.members.push(userId);
+                    this.save();
+                    return group;
+                }
+                return null;
+            }
+
+            getUserGroups(userId) {
+                return Object.values(this.storage.groups).filter(g =>
+                    g.members.includes(userId)
+                );
+            }
+
+            // Meeting operations
+            createMeeting(groupId, activity, date, time, creatorId) {
+                const meetingId = 'meeting-' + Date.now();
+                this.storage.meetings[meetingId] = {
+                    id: meetingId,
+                    groupId,
+                    activity,
+                    date,
+                    time,
+                    createdBy: creatorId,
+                    createdAt: new Date().toISOString()
+                };
+                this.save();
+                return meetingId;
+            }
+
+            getUserMeetings(userId) {
+                const userGroups = this.getUserGroups(userId);
+                const groupIds = userGroups.map(g => g.id);
+                return Object.values(this.storage.meetings).filter(m =>
+                    groupIds.includes(m.groupId)
+                );
+            }
+
+            // BlockTime operations
+            addBlockTime(userId, blockTime) {
+                if (!this.storage.blockTimes[userId]) {
+                    this.storage.blockTimes[userId] = [];
+                }
+                const blockTimeId = 'bt-' + Date.now();
+                blockTime.id = blockTimeId;
+                blockTime.userId = userId;
+                this.storage.blockTimes[userId].push(blockTime);
+                this.save();
+                return blockTimeId;
+            }
+
+            deleteBlockTime(userId, blockTimeId) {
+                if (this.storage.blockTimes[userId]) {
+                    this.storage.blockTimes[userId] = this.storage.blockTimes[userId].filter(
+                        bt => bt.id !== blockTimeId
+                    );
+                    this.save();
+                }
+            }
+
+            getUserBlockTimes(userId) {
+                return this.storage.blockTimes[userId] || [];
+            }
+        }
+
+        // Initialize database
+        const db = new DatabaseService();
+
+        // Activity suggestions
+        const ACTIVITY_SUGGESTIONS = [
+            '☕ Kaffee trinken',
+            '🍕 Pizza essen',
+            '🎬 Kino',
+            '🎳 Bowling',
+            '🚶 Spaziergang',
+            '🏃 Sport',
+            '🎮 Gaming',
+            '🍔 Restaurant',
+            '🎲 Spieleabend',
+            '🏊 Schwimmen',
+            '⛰️ Wandern',
+            '🎤 Karaoke',
+            '🍻 Bar',
+            '🎨 Museum'
+        ];
+
+        // App State
+        let appState = {
+            currentUser: null,
+            settings: {
+                darkMode: false
+            },
+            currentDate: new Date()
+        };
+
+        const weekDays = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+
+        // Login
+        function login() {
+            const name = document.getElementById('login-name').value.trim();
+            if (!name) return;
+
+            appState.currentUser = db.createUser(name);
+            localStorage.setItem('current-user-id', appState.currentUser);
+
+            showApp();
+        }
+
+        function showApp() {
+            document.getElementById('login-container').classList.add('hidden');
+            document.getElementById('app-container').classList.remove('hidden');
+            const user = db.getUser(appState.currentUser);
+            document.getElementById('user-name').value = user.name;
+            renderCalendar();
+        }
+
+        // Load data
+        function loadData() {
+            const userId = localStorage.getItem('current-user-id');
+            if (userId && db.getUser(userId)) {
+                appState.currentUser = userId;
+                showApp();
+            } else {
+                document.getElementById('login-container').classList.remove('hidden');
+            }
+
+            const darkMode = localStorage.getItem('dark-mode') === 'true';
+            if (darkMode) {
+                appState.settings.darkMode = true;
+                document.body.classList.add('dark');
+                document.getElementById('dark-mode-toggle').textContent = '☀️';
+            }
+        }
+
+        // Screen switching
+        function switchScreen(screen) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+            document.getElementById(`${screen}-screen`).classList.remove('hidden');
+
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            event.currentTarget.classList.add('active');
+
+            if (screen === 'groups') renderGroups();
+            if (screen === 'plan') renderMeetings();
+            if (screen === 'calendar') renderCalendar();
+            if (screen === 'profile') renderBlockTimes();
+        }
+
+        // Dark Mode
+        document.getElementById('dark-mode-toggle').addEventListener('click', () => {
+            appState.settings.darkMode = !appState.settings.darkMode;
+            document.body.classList.toggle('dark', appState.settings.darkMode);
+            document.getElementById('dark-mode-toggle').textContent = appState.settings.darkMode ? '☀️' : '🌙';
+            localStorage.setItem('dark-mode', appState.settings.darkMode);
+        });
+
+        // Name ändern
+        document.getElementById('user-name').addEventListener('input', (e) => {
+            const newName = e.target.value;
+            db.updateUser(appState.currentUser, { name: newName });
+        });
+
+        // Blockzeiten
+        function showAddBlockTimeModal() {
+            const html = `
+                <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
+                    <div class="modal">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Blockzeit hinzufügen</h3>
+                            <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
+                        </div>
+                        <label class="input-label">Titel</label>
+                        <input type="text" id="blocktime-title" class="input" placeholder="z.B. Arbeit, Sport">
+
+                        <label class="input-label">Zeitraum</label>
+                        <div class="day-type-selector">
+                            <button class="day-type-btn active" data-type="weekdays" onclick="selectDayType('weekdays')">Werktags</button>
+                            <button class="day-type-btn" data-type="weekend" onclick="selectDayType('weekend')">Wochenende</button>
+                            <button class="day-type-btn" data-type="date" onclick="selectDayType('date')">Datum</button>
+                        </div>
+
+                        <div id="date-selector" class="hidden">
+                            <label class="input-label">Datum</label>
+                            <input type="date" id="blocktime-date" class="input">
+                        </div>
+
+                        <label class="input-label">Von (Uhrzeit)</label>
+                        <input type="time" id="blocktime-start" class="input" value="09:00">
+
+                        <label class="input-label">Bis (Uhrzeit)</label>
+                        <input type="time" id="blocktime-end" class="input" value="17:00">
+
+                        <button class="btn btn-primary" onclick="addBlockTime()">Speichern</button>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+            window.selectedDayType = 'weekdays';
+        }
+
+        function selectDayType(type) {
+            window.selectedDayType = type;
+            document.querySelectorAll('.day-type-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.type === type);
+            });
+            document.getElementById('date-selector').classList.toggle('hidden', type !== 'date');
+        }
+
+        function addBlockTime() {
+            const title = document.getElementById('blocktime-title').value;
+            const startTime = document.getElementById('blocktime-start').value;
+            const endTime = document.getElementById('blocktime-end').value;
+
+            if (!title) return;
+
+            let blockTime = {
+                title,
+                startTime,
+                endTime,
+                type: window.selectedDayType
+            };
+
+            if (window.selectedDayType === 'date') {
+                blockTime.date = document.getElementById('blocktime-date').value;
+                if (!blockTime.date) return;
+            }
+
+            db.addBlockTime(appState.currentUser, blockTime);
+
+            document.querySelector('.modal-overlay').remove();
+            renderBlockTimes();
+        }
+
+        function deleteBlockTime(id) {
+            db.deleteBlockTime(appState.currentUser, id);
+            renderBlockTimes();
+        }
+
+        function renderBlockTimes() {
+            const list = document.getElementById('block-times-list');
+            const userBlockTimes = db.getUserBlockTimes(appState.currentUser);
+
+            if (userBlockTimes.length === 0) {
+                list.innerHTML = '<p class="empty-state">Keine Blockzeiten eingestellt</p>';
+                return;
+            }
+
+            list.innerHTML = userBlockTimes.map(bt => {
+                let dayText = '';
+                if (bt.type === 'weekdays') dayText = 'Werktags (Mo-Fr)';
+                else if (bt.type === 'weekend') dayText = 'Wochenende (Sa-So)';
+                else if (bt.type === 'date') dayText = new Date(bt.date).toLocaleDateString('de-DE');
+
+                return `
+                    <div class="block-time-item">
+                        <div class="block-time-info">
+                            <div class="block-time-title">${bt.title}</div>
+                            <div class="block-time-details">${dayText} · ${bt.startTime} - ${bt.endTime}</div>
+                        </div>
+                        <button class="delete-btn" onclick="deleteBlockTime('${bt.id}')">🗑️</button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Gruppen
+        function showCreateGroupModal() {
+            const html = `
+                <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
+                    <div class="modal">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Neue Gruppe erstellen</h3>
+                            <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
+                        </div>
+                        <label class="input-label">Gruppenname</label>
+                        <input type="text" id="group-name-input" class="input" placeholder="z.B. Freunde, Familie">
+                        <button class="btn btn-primary" onclick="createGroup()">Erstellen</button>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function createGroup() {
+            const name = document.getElementById('group-name-input').value;
+            if (!name) return;
+
+            const { groupId, groupCode } = db.createGroup(name, appState.currentUser);
+
+            document.querySelector('.modal-overlay').remove();
+            showGroupCodeModal(groupCode, name);
+            renderGroups();
+        }
+
+        function showGroupCodeModal(code, groupName) {
+            const html = `
+                <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
+                    <div class="modal">
+                        <div class="modal-header">
+                            <h3 class="modal-title">🎉 Gruppe erstellt!</h3>
+                            <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
+                        </div>
+                        <p style="color: var(--text-secondary); margin-bottom: 16px;">
+                            Teile diesen Code mit deinen Freunden:
+                        </p>
+                        <div class="group-code">${code}</div>
+                        <button class="btn btn-secondary" style="width: 100%;" onclick="copyGroupCode('${code}')">📋 Code kopieren</button>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function copyGroupCode(code) {
+            navigator.clipboard.writeText(code).then(() => {
+                alert('Code kopiert! ✓');
+            });
+        }
+
+        function showJoinGroupModal() {
+            const html = `
+                <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
+                    <div class="modal">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Gruppe beitreten</h3>
+                            <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
+                        </div>
+                        <label class="input-label">Gruppen-Code</label>
+                        <input type="text" id="join-group-code" class="input" placeholder="6-stelliger Code" maxlength="6" style="text-transform: uppercase; text-align: center; font-size: 20px; letter-spacing: 2px;">
+                        <button class="btn btn-primary" onclick="joinGroup()">Beitreten</button>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function joinGroup() {
+            const code = document.getElementById('join-group-code').value.toUpperCase();
+            if (!code) return;
+
+            const group = db.joinGroup(code, appState.currentUser);
+
+            if (!group) {
+                alert('❌ Gruppe nicht gefunden. Prüfe den Code.');
+                return;
+            }
+
+            document.querySelector('.modal-overlay').remove();
+            alert(`✓ Du bist der Gruppe "${group.name}" beigetreten!`);
+            renderGroups();
+        }
+
+        function renderGroups() {
+            const list = document.getElementById('groups-list');
+            const userGroups = db.getUserGroups(appState.currentUser);
+
+            if (userGroups.length === 0) {
+                list.innerHTML = '<div class="empty-state"><h3>Noch keine Gruppen</h3><p>Erstelle eine Gruppe oder tritt einer bei</p></div>';
+                return;
+            }
+
+            list.innerHTML = userGroups.map(group => {
+                const memberNames = group.members
+                    .map(userId => db.getUser(userId)?.name || 'Unbekannt')
+                    .join(', ');
+
+                return `
+                    <div class="group-card" onclick="showGroupDetails('${group.id}')">
+                        <h3>${group.name}</h3>
+                        <p style="color: var(--text-secondary); margin: 8px 0;">Code: <span style="font-family: monospace; color: var(--accent); font-weight: 700;">${group.code}</span></p>
+                        <p style="font-size: 14px; color: var(--text-secondary);">${memberNames}</p>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function showGroupDetails(groupId) {
+            const group = db.storage.groups[groupId];
+            if (!group) return;
+
+            const memberNames = group.members.map(userId =>
+                db.getUser(userId)?.name || 'Unbekannt'
+            ).join(', ');
+
+            const html = `
+                <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
+                    <div class="modal">
+                        <div class="modal-header">
+                            <h3 class="modal-title">${group.name}</h3>
+                            <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
+                        </div>
+                        <p style="color: var(--text-secondary); margin-bottom: 8px;">Gruppen-Code:</p>
+                        <div class="group-code">${group.code}</div>
+                        <button class="btn btn-secondary" style="width: 100%; margin-bottom: 16px;" onclick="copyGroupCode('${group.code}')">📋 Code kopieren</button>
+                        <p style="color: var(--text-secondary); margin-bottom: 8px;">Mitglieder (${group.members.length}):</p>
+                        <p style="margin-bottom: 16px;">${memberNames}</p>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        // Meetings mit Aktivitätsvorschlägen
+        function showCreateMeetingModal() {
+            const userGroups = db.getUserGroups(appState.currentUser);
+
+            if (userGroups.length === 0) {
+                alert('Erstelle zuerst eine Gruppe oder tritt einer bei!');
+                return;
+            }
+
+            const today = new Date().toISOString().split('T')[0];
+            const html = `
+                <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
+                    <div class="modal">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Treffen planen</h3>
+                            <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
+                        </div>
+                        <label class="input-label">Gruppe</label>
+                        <select id="meeting-group" class="select">
+                            ${userGroups.map(g => `<option value="${g.id}">${g.name}</option>`).join('')}
+                        </select>
+                        <label class="input-label">Aktivität</label>
+                        <div class="activity-suggestions">
+                            ${ACTIVITY_SUGGESTIONS.map(act => `
+                                <div class="activity-chip" onclick="selectActivity('${act}')">${act}</div>
+                            `).join('')}
+                        </div>
+                        <input type="text" id="meeting-activity" class="input" placeholder="Oder eigene Aktivität eingeben">
+                        <label class="input-label">Datum</label>
+                        <input type="date" id="meeting-date" class="input" min="${today}">
+                        <label class="input-label">Uhrzeit</label>
+                        <input type="time" id="meeting-time" class="input">
+                        <button class="btn btn-primary" onclick="createMeeting()">Erstellen</button>
+                    </div>
+                </div>
+            `;
+            document.body.insertAdjacentHTML('beforeend', html);
+        }
+
+        function selectActivity(activity) {
+            document.getElementById('meeting-activity').value = activity;
+        }
+
+        function createMeeting() {
+            const groupId = document.getElementById('meeting-group').value;
+            const activity = document.getElementById('meeting-activity').value;
+            const date = document.getElementById('meeting-date').value;
+            const time = document.getElementById('meeting-time').value;
+
+            if (!activity || !date || !time) return;
+
+            db.createMeeting(groupId, activity, date, time, appState.currentUser);
+
+            document.querySelector('.modal-overlay').remove();
+            renderMeetings();
+            renderCalendar();
+        }
+
+        function renderMeetings() {
+            const list = document.getElementById('meetings-list');
+            const userMeetings = db.getUserMeetings(appState.currentUser);
+
+            if (userMeetings.length === 0) {
+                list.innerHTML = '<div class="card"><p class="empty-state">Keine geplanten Treffen</p></div>';
+                return;
+            }
+
+            list.innerHTML = '<div class="card"><h2 class="card-title">Geplante Treffen</h2>' +
+                userMeetings.sort((a, b) => new Date(a.date) - new Date(b.date)).map(meeting => {
+                    const group = db.storage.groups[meeting.groupId];
+                    return `
+                        <div class="meeting-item">
+                            <h3>${meeting.activity}</h3>
+                            <p style="color: var(--accent); font-weight: 600;">${group?.name || 'Unbekannte Gruppe'}</p>
+                            <p>${new Date(meeting.date).toLocaleDateString('de-DE')} um ${meeting.time}</p>
+                        </div>
+                    `;
+                }).join('') + '</div>';
+        }
+
+        // Kalender
+        function renderCalendar() {
+            const title = document.getElementById('calendar-title');
+            const content = document.getElementById('calendar-content');
+
+            title.textContent = appState.currentDate.toLocaleDateString('de-DE', {
+                weekday: 'long',
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric'
+            });
+
+            const dateStr = appState.currentDate.toISOString().split('T')[0];
+            const dayOfWeek = appState.currentDate.getDay();
+
+            const todayMeetings = db.getUserMeetings(appState.currentUser).filter(m => m.date === dateStr);
+            const userBlockTimes = db.getUserBlockTimes(appState.currentUser);
+            const todayBlockTimes = userBlockTimes.filter(bt => {
+                if (bt.type === 'weekdays') return dayOfWeek >= 1 && dayOfWeek <= 5;
+                if (bt.type === 'weekend') return dayOfWeek === 0 || dayOfWeek === 6;
+                if (bt.type === 'date') return bt.date === dateStr;
+                return false;
+            });
+
+            let timelineHTML = '<div class="card"><h2 class="card-title">Tagesübersicht</h2><div class="timeline">';
+
+            for (let hour = 0; hour < 24; hour++) {
+                const hourStr = hour.toString().padStart(2, '0');
+                let eventsHTML = '';
+
+                todayBlockTimes.forEach(bt => {
+                    const startHour = parseInt(bt.startTime.split(':')[0]);
+                    const endHour = parseInt(bt.endTime.split(':')[0]);
+                    if (hour >= startHour && hour < endHour) {
+                        eventsHTML += `<div class="event-block blocktime">${bt.title}</div>`;
+                    }
+                });
+
+                todayMeetings.forEach(m => {
+                    const meetingHour = parseInt(m.time.split(':')[0]);
+                    if (hour === meetingHour) {
+                        eventsHTML += `<div class="event-block meeting">${m.activity}</div>`;
+                    }
+                });
+
+                timelineHTML += `
+                    <div class="timeline-hour">
+                        <div class="hour-label">${hourStr}:00</div>
+                        <div class="hour-events">${eventsHTML || '<span style="color: var(--text-secondary); font-size: 12px;">Frei</span>'}</div>
+                    </div>
+                `;
+            }
+
+            timelineHTML += '</div></div>';
+            content.innerHTML = timelineHTML;
+        }
+
+        function changeDay(delta) {
+            appState.currentDate.setDate(appState.currentDate.getDate() + delta);
+            renderCalendar();
+        }
+
+        // Initial laden
+        loadData();
+    </script>
+</body>
+</html>
