@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#007AFF">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="TreffSyn">
+    <title>TreffSyn - Live Treffen synchronisieren</title>
+    <link rel="stylesheet" href="index.css">
+</head>
+<body>
+    <div class="sync-indicator" id="sync-indicator">🔄 Synchronisiert...</div>
+
+    <div id="login-container" class="login-screen hidden">
+        <div class="login-card">
+            <h1 class="login-title">🔄 TreffSyn</h1>
+            <p class="login-subtitle">Synchronisiere Treffen mit Freunden</p>
+
+            <label class="input-label">Dein Name</label>
+            <input type="text" id="login-name" class="input" placeholder="Wie heißt du?" autofocus autocomplete="username"
+                   onkeydown="if(event.key==='Enter')document.getElementById('login-password').focus()">
+
+            <label class="input-label">Passwort</label>
+            <input type="password" id="login-password" class="input" placeholder="Passwort" autocomplete="current-password"
+                   onkeydown="if(event.key==='Enter')login()">
+
+            <p id="login-error" class="login-error hidden"></p>
+
+            <button class="btn btn-primary" style="width: 100%;" onclick="login()">Anmelden / Registrieren</button>
+            <p class="login-hint">Bekannte Kombination → Login. Neu → Account wird angelegt.</p>
+        </div>
+    </div>
+
+    <div id="app-container" class="app hidden">
+        <main class="main-content">
+            <!-- Profil Screen -->
+            <div id="profile-screen" class="screen hidden">
+                <h1 class="screen-title">Profil</h1>
+                <div class="card">
+                    <h2 class="card-title">Persönliche Einstellungen</h2>
+                    <label class="input-label">Name</label>
+                    <input type="text" id="user-name" class="input" placeholder="Dein Name">
+                    <div class="setting-row">
+                        <span>Dunkelmodus</span>
+                        <button class="toggle-btn" id="dark-mode-toggle">🌙</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Blockzeiten</h2>
+                        <button class="btn btn-primary btn-sm" onclick="showAddBlockTimeModal()">+ Hinzufügen</button>
+                    </div>
+                    <div id="block-times-list"></div>
+                </div>
+
+                <div class="card">
+                    <button class="btn btn-danger" style="width: 100%;" onclick="logout()">Ausloggen</button>
+                </div>
+            </div>
+
+            <!-- Gruppen Screen -->
+            <div id="groups-screen" class="screen hidden">
+                <div class="screen-header">
+                    <h1 class="screen-title">Gruppen</h1>
+                    <button class="btn btn-primary" onclick="showCreateGroupModal()">+ Erstellen</button>
+                </div>
+                <div style="margin-bottom: 16px;">
+                    <button class="btn btn-secondary" style="width: 100%;" onclick="showJoinGroupModal()">🔑 Gruppe beitreten</button>
+                </div>
+                <div id="groups-list"></div>
+            </div>
+
+            <!-- Kalender Screen -->
+            <div id="calendar-screen" class="screen">
+                <div class="calendar-header">
+                    <button class="icon-btn" onclick="navigateCalendar(-1)">‹</button>
+                    <div class="calendar-title" id="calendar-title">Heute</div>
+                    <button class="icon-btn" onclick="navigateCalendar(1)">›</button>
+                </div>
+                <div class="calendar-controls">
+                    <div class="calendar-segment" id="calendar-filter-toggle">
+                        <button type="button" class="cal-seg-btn active" data-filter="mine" onclick="setCalendarFilter('mine')">Deine Termine</button>
+                        <button type="button" class="cal-seg-btn" data-filter="group" onclick="setCalendarFilter('group')">Gruppe</button>
+                        <button type="button" class="cal-seg-btn" data-filter="meetings" onclick="setCalendarFilter('meetings')">Nur Treffen</button>
+                    </div>
+                    <div id="calendar-group-select-wrap" class="hidden">
+                        <select id="calendar-group-select" class="select" onchange="setCalendarGroup(this.value)"></select>
+                    </div>
+                    <div class="calendar-segment" id="calendar-view-toggle">
+                        <button type="button" class="cal-seg-btn active" data-view="day" onclick="setCalendarView('day')">Tag</button>
+                        <button type="button" class="cal-seg-btn" data-view="week" onclick="setCalendarView('week')">Woche</button>
+                        <button type="button" class="cal-seg-btn" data-view="month" onclick="setCalendarView('month')">Monat</button>
+                        <button type="button" class="cal-seg-btn" data-view="agenda" onclick="setCalendarView('agenda')">Termine</button>
+                    </div>
+                </div>
+                <div id="calendar-content"></div>
+            </div>
+
+            <!-- Plan Screen -->
+            <div id="plan-screen" class="screen hidden">
+                <div class="screen-header">
+                    <h1 class="screen-title">Plan</h1>
+                    <button class="btn btn-primary" onclick="showCreateMeetingModal()">+ Treffen planen</button>
+                </div>
+                <div id="meetings-list"></div>
+            </div>
+        </main>
+
+        <nav class="bottom-nav">
+            <button class="nav-item" onclick="switchScreen('groups')">
+                <span style="font-size: 24px;">👥</span>
+                <span>Gruppen</span>
+            </button>
+            <button class="nav-item active" onclick="switchScreen('calendar')">
+                <span style="font-size: 24px;">📅</span>
+                <span>Kalender</span>
+            </button>
+            <button class="nav-item" onclick="switchScreen('plan')">
+                <span style="font-size: 24px;">📋</span>
+                <span>Plan</span>
+            </button>
+            <button class="nav-item" onclick="switchScreen('profile')">
+                <span style="font-size: 24px;">👤</span>
+                <span>Profil</span>
+            </button>
+        </nav>
+    </div>
+
+    <script type="module" src="index.js"></script>
+</body>
+</html>

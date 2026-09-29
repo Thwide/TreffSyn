@@ -1,0 +1,1773 @@
+// Import Firebase SDKs
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+import { getDatabase, ref, set, get, onValue, push, remove, update, child } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+// Firebase configuration
+const firebaseConfig = {
+    apiKey: "AIzaSyDeCrIWUChOeDamcvOV0RdC7aPmfNPP_hw",
+    authDomain: "treffsyn.firebaseapp.com",
+    databaseURL: "https://treffsyn-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "treffsyn",
+    storageBucket: "treffsyn.firebasestorage.app",
+    messagingSenderId: "993643647860",
+    appId: "1:993643647860:web:36e195d7e05f9a2cbc5221"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const database = getDatabase(app);
+
+// Make Firebase available globally
+window.firebase = {
+    database,
+    ref,
+    set,
+    get,
+    onValue,
+    push,
+    remove,
+    update,
+    child
+};
+
+console.log('✅ Firebase verbunden!');
+window.dispatchEvent(new Event('firebase-ready'));
+
+// Activity suggestions
+const ACTIVITY_SUGGESTIONS = [
+    '☕ Kaffee trinken',
+    '🍕 Pizza essen',
+    '🎬 Kino',
+    '🎳 Bowling',
+    '🚶 Spaziergang',
+    '🏃 Sport',
+    '🎮 Gaming',
+    '🍔 Restaurant',
+    '🎲 Spieleabend',
+    '🏊 Schwimmen',
+    '⛰️ Wandern',
+    '🎤 Karaoke',
+    '🍻 Bar',
+    '🎨 Museum'
+];
+
+const weekDays = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+
+// Firebase Database Service
+class FirebaseService {
+    constructor() {
+        this.db = null;
+        this.listeners = {};
+    }
+
+    waitForFirebase() {
+        return new Promise((resolve) => {
+            if (window.firebase) {
+                this.db = window.firebase.database;
+                resolve();
+            } else {
+                window.addEventListener('firebase-ready', () => {
+                    this.db = window.firebase.database;
+                    resolve();
+                });
+            }
+        });
+    }
+
+    showSync(status, message) {
+        const indicator = document.getElementById('sync-indicator');
+        indicator.className = 'sync-indicator ' + status;
+        indicator.textContent = message;
+        if (status === 'synced') {
+            setTimeout(() => { indicator.style.display = 'none'; }, 2000);
+        }
+    }
+
+    // User operations
+    async hashPassword(password) {
+        const data = new TextEncoder().encode(password);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        return Array.from(new Uint8Array(hashBuffer))
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+    }
+
+    async findUserByCredentials(name, password) {
+        await this.waitForFirebase();
+        const passwordHash = await this.hashPassword(password);
+        const users = await this.getAllUsers();
+        return Object.values(users).find(u =>
+            u.name === name && u.passwordHash === passwordHash
+        ) || null;
+    }
+
+    async loginOrRegister(name, password) {
+        const existing = await this.findUserByCredentials(name, password);
+        if (existing) {
+            this.showSync('synced', '✓ Willkommen zurück');
+            return existing.id;
+        }
+        return this.createUser(name, password);
+    }
+
+    async createUser(name, password) {
+        await this.waitForFirebase();
+        const userId = 'user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        const passwordHash = await this.hashPassword(password);
+        const userData = {
+            id: userId,
+            name: name,
+            passwordHash,
+            darkMode: false,
+            createdAt: new Date().toISOString()
+        };
+
+        await window.firebase.set(window.firebase.ref(this.db, 'users/' + userId), userData);
+        this.showSync('synced', '✓ Benutzer erstellt');
+        return userId;
+    }
+
+    async updateUser(userId, updates) {
+        await this.waitForFirebase();
+        const userRef = window.firebase.ref(this.db, 'users/' + userId);
+        const snapshot = await window.firebase.get(userRef);
+        if (snapshot.exists()) {
+            const userData = { ...snapshot.val(), ...updates };
+            await window.firebase.set(userRef, userData);
+            this.showSync('synced', '✓ Gespeichert');
+        }
+    }
+
+    async getUser(userId) {
+        await this.waitForFirebase();
+        const snapshot = await window.firebase.get(window.firebase.ref(this.db, 'users/' + userId));
+        return snapshot.exists() ? snapshot.val() : null;
+    }
+
+    async getAllUsers() {
+        await this.waitForFirebase();
+        const snapshot = await window.firebase.get(window.firebase.ref(this.db, 'users'));
+        return snapshot.exists() ? snapshot.val() : {};
+    }
+
+    // Group operations
+    generateGroupCode() {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        let code = '';
+        for (let i = 0; i < 6; i++) {
+            code += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return code;
+    }
+
+    normalizeGroup(group) {
+        if (!group) return null;
+        const members = Array.isArray(group.members) ? group.members : [];
+        const admins = Array.isArray(group.admins) && group.admins.length
+            ? group.admins
+            : (group.createdBy ? [group.createdBy] : []);
+        return {
+            ...group,
+            members,
+            admins,
+            joinMode: group.joinMode === 'approval' ? 'approval' : 'open',
+            pendingRequests: group.pendingRequests && typeof group.pendingRequests === 'object'
+                ? group.pendingRequests
+                : {}
+        };
+    }
+
+    isGroupAdmin(group, userId) {
+        const g = this.normalizeGroup(group);
+        return !!(g && g.admins.includes(userId));
+    }
+
+    async saveGroup(group) {
+        await window.firebase.set(window.firebase.ref(this.db, 'groups/' + group.id), group);
+    }
+
+    async createGroup(name, creatorId, joinMode = 'open') {
+        await this.waitForFirebase();
+        const groupId = 'group-' + Date.now();
+        const groupCode = this.generateGroupCode();
+        const groupData = {
+            id: groupId,
+            name: name,
+            code: groupCode,
+            members: [creatorId],
+            admins: [creatorId],
+            joinMode: joinMode === 'approval' ? 'approval' : 'open',
+            pendingRequests: {},
+            createdBy: creatorId,
+            createdAt: new Date().toISOString()
+        };
+
+        await this.saveGroup(groupData);
+        this.showSync('synced', '✓ Gruppe erstellt');
+        return { groupId, groupCode };
+    }
+
+    async joinGroup(code, userId) {
+        await this.waitForFirebase();
+        const groups = await this.getAllGroups();
+        const group = Object.values(groups).find(g => g.code === code);
+
+        if (!group) {
+            return { status: 'not_found' };
+        }
+
+        const g = this.normalizeGroup(group);
+
+        if (g.members.includes(userId)) {
+            return { status: 'already_member', group: g };
+        }
+
+        if (g.pendingRequests[userId]) {
+            return { status: 'pending', group: g };
+        }
+
+        if (g.joinMode === 'approval') {
+            g.pendingRequests[userId] = { requestedAt: new Date().toISOString() };
+            await this.saveGroup(g);
+            this.showSync('synced', '✓ Beitrittsanfrage gesendet');
+            return { status: 'pending', group: g };
+        }
+
+        g.members.push(userId);
+        await this.saveGroup(g);
+        this.showSync('synced', '✓ Gruppe beigetreten');
+        return { status: 'joined', group: g };
+    }
+
+    async approveJoinRequest(groupId, userId, adminId) {
+        await this.waitForFirebase();
+        const groups = await this.getAllGroups();
+        const g = this.normalizeGroup(groups[groupId]);
+        if (!g || !this.isGroupAdmin(g, adminId)) return false;
+        if (!g.pendingRequests[userId]) return false;
+
+        if (!g.members.includes(userId)) {
+            g.members.push(userId);
+        }
+        delete g.pendingRequests[userId];
+        await this.saveGroup(g);
+        this.showSync('synced', '✓ Anfrage angenommen');
+        return true;
+    }
+
+    async rejectJoinRequest(groupId, userId, adminId) {
+        await this.waitForFirebase();
+        const groups = await this.getAllGroups();
+        const g = this.normalizeGroup(groups[groupId]);
+        if (!g || !this.isGroupAdmin(g, adminId)) return false;
+        if (!g.pendingRequests[userId]) return false;
+
+        delete g.pendingRequests[userId];
+        await this.saveGroup(g);
+        this.showSync('synced', '✓ Anfrage abgelehnt');
+        return true;
+    }
+
+    async updateGroupName(groupId, name, adminId) {
+        await this.waitForFirebase();
+        const groups = await this.getAllGroups();
+        const g = this.normalizeGroup(groups[groupId]);
+        if (!g || !this.isGroupAdmin(g, adminId) || !name) return false;
+
+        g.name = name.trim();
+        await this.saveGroup(g);
+        this.showSync('synced', '✓ Name geändert');
+        return true;
+    }
+
+    async updateJoinMode(groupId, joinMode, adminId) {
+        await this.waitForFirebase();
+        const groups = await this.getAllGroups();
+        const g = this.normalizeGroup(groups[groupId]);
+        if (!g || !this.isGroupAdmin(g, adminId)) return false;
+
+        g.joinMode = joinMode === 'approval' ? 'approval' : 'open';
+        await this.saveGroup(g);
+        this.showSync('synced', '✓ Beitrittsmodus geändert');
+        return true;
+    }
+
+    async removeMember(groupId, memberId, adminId) {
+        await this.waitForFirebase();
+        const groups = await this.getAllGroups();
+        const g = this.normalizeGroup(groups[groupId]);
+        if (!g || !this.isGroupAdmin(g, adminId)) return { ok: false, error: 'no_permission' };
+        if (!g.members.includes(memberId)) return { ok: false, error: 'not_member' };
+
+        const isTargetAdmin = g.admins.includes(memberId);
+        if (isTargetAdmin && g.admins.length <= 1) {
+            return { ok: false, error: 'last_admin' };
+        }
+
+        g.members = g.members.filter(id => id !== memberId);
+        g.admins = g.admins.filter(id => id !== memberId);
+        if (g.pendingRequests[memberId]) delete g.pendingRequests[memberId];
+        await this.saveGroup(g);
+        this.showSync('synced', '✓ Mitglied entfernt');
+        return { ok: true };
+    }
+
+    async leaveGroup(groupId, userId) {
+        await this.waitForFirebase();
+        const groups = await this.getAllGroups();
+        const g = this.normalizeGroup(groups[groupId]);
+        if (!g || !g.members.includes(userId)) return { ok: false, error: 'not_member' };
+
+        const isAdmin = g.admins.includes(userId);
+        if (isAdmin && g.admins.length <= 1 && g.members.length > 1) {
+            return { ok: false, error: 'last_admin' };
+        }
+
+        g.members = g.members.filter(id => id !== userId);
+        g.admins = g.admins.filter(id => id !== userId);
+        if (g.pendingRequests[userId]) delete g.pendingRequests[userId];
+
+        if (g.members.length === 0) {
+            await window.firebase.remove(window.firebase.ref(this.db, 'groups/' + groupId));
+        } else {
+            await this.saveGroup(g);
+        }
+        this.showSync('synced', '✓ Gruppe verlassen');
+        return { ok: true };
+    }
+
+    async getAllGroups() {
+        await this.waitForFirebase();
+        const snapshot = await window.firebase.get(window.firebase.ref(this.db, 'groups'));
+        const raw = snapshot.exists() ? snapshot.val() : {};
+        const normalized = {};
+        Object.keys(raw).forEach(id => {
+            normalized[id] = this.normalizeGroup(raw[id]);
+        });
+        return normalized;
+    }
+
+    async getUserGroups(userId) {
+        const groups = await this.getAllGroups();
+        return Object.values(groups).filter(g => g.members.includes(userId));
+    }
+
+    // Meeting operations
+    async createMeeting(groupId, activity, date, time, creatorId) {
+        await this.waitForFirebase();
+        const meetingId = 'meeting-' + Date.now();
+        const now = new Date().toISOString();
+        const meetingData = {
+            id: meetingId,
+            groupId,
+            activity,
+            date,
+            time,
+            createdBy: creatorId,
+            createdAt: now,
+            responses: {}
+        };
+
+        await window.firebase.set(window.firebase.ref(this.db, 'meetings/' + meetingId), meetingData);
+        this.showSync('synced', '✓ Treffen geplant');
+        return meetingId;
+    }
+
+    async deleteMeeting(meetingId, userId) {
+        await this.waitForFirebase();
+        const snapshot = await window.firebase.get(window.firebase.ref(this.db, 'meetings/' + meetingId));
+        if (!snapshot.exists()) return { ok: false, error: 'not_found' };
+        const meeting = snapshot.val();
+        if (meeting.createdBy !== userId) return { ok: false, error: 'no_permission' };
+
+        await window.firebase.remove(window.firebase.ref(this.db, 'meetings/' + meetingId));
+        this.showSync('synced', '✓ Treffen gelöscht');
+        return { ok: true };
+    }
+
+    async respondToMeeting(meetingId, userId, status, comment) {
+        await this.waitForFirebase();
+        const responseData = {
+            status,
+            comment: comment || '',
+            updatedAt: new Date().toISOString()
+        };
+        await window.firebase.set(
+            window.firebase.ref(this.db, 'meetings/' + meetingId + '/responses/' + userId),
+            responseData
+        );
+        this.showSync('synced', status === 'accepted' ? '✓ Zugesagt' : '✓ Abgesagt');
+    }
+
+    async getAllMeetings() {
+        await this.waitForFirebase();
+        const snapshot = await window.firebase.get(window.firebase.ref(this.db, 'meetings'));
+        return snapshot.exists() ? snapshot.val() : {};
+    }
+
+    async getUserMeetings(userId) {
+        const userGroups = await this.getUserGroups(userId);
+        const groupIds = userGroups.map(g => g.id);
+        const meetings = await this.getAllMeetings();
+        return Object.values(meetings).filter(m => groupIds.includes(m.groupId));
+    }
+
+    // BlockTime operations
+    async addBlockTime(userId, blockTime) {
+        await this.waitForFirebase();
+        const blockTimeId = 'bt-' + Date.now();
+        blockTime.id = blockTimeId;
+        blockTime.userId = userId;
+
+        await window.firebase.set(window.firebase.ref(this.db, 'blockTimes/' + userId + '/' + blockTimeId), blockTime);
+        this.showSync('synced', '✓ Blockzeit gespeichert');
+        return blockTimeId;
+    }
+
+    async deleteBlockTime(userId, blockTimeId) {
+        await this.waitForFirebase();
+        await window.firebase.remove(window.firebase.ref(this.db, 'blockTimes/' + userId + '/' + blockTimeId));
+        this.showSync('synced', '✓ Gelöscht');
+    }
+
+    async getUserBlockTimes(userId) {
+        await this.waitForFirebase();
+        const snapshot = await window.firebase.get(window.firebase.ref(this.db, 'blockTimes/' + userId));
+        if (snapshot.exists()) {
+            return Object.values(snapshot.val());
+        }
+        return [];
+    }
+
+    // Real-time listeners
+    listenToGroups(callback) {
+        if (!this.db) return;
+        const unsubscribe = window.firebase.onValue(window.firebase.ref(this.db, 'groups'), (snapshot) => {
+            callback(snapshot.val() || {});
+        });
+        this.listeners.groups = unsubscribe;
+    }
+
+    listenToMeetings(callback) {
+        if (!this.db) return;
+        const unsubscribe = window.firebase.onValue(window.firebase.ref(this.db, 'meetings'), (snapshot) => {
+            callback(snapshot.val() || {});
+        });
+        this.listeners.meetings = unsubscribe;
+    }
+}
+
+// Initialize Firebase service
+const db = new FirebaseService();
+
+// App State
+let appState = {
+    currentUser: null,
+    settings: {
+        darkMode: false
+    },
+    currentDate: new Date(),
+    calendarFilter: 'mine',
+    calendarView: 'day',
+    selectedGroupId: null,
+    listenersReady: false
+};
+
+// Login
+async function login() {
+    const name = document.getElementById('login-name').value.trim();
+    const password = document.getElementById('login-password').value;
+    const errorEl = document.getElementById('login-error');
+
+    if (!name || !password) {
+        errorEl.textContent = 'Bitte Name und Passwort eingeben.';
+        errorEl.classList.remove('hidden');
+        return;
+    }
+
+    errorEl.classList.add('hidden');
+    appState.currentUser = await db.loginOrRegister(name, password);
+    localStorage.setItem('treffsyn-current-user-id', appState.currentUser);
+
+    showApp();
+}
+
+function logout() {
+    localStorage.removeItem('treffsyn-current-user-id');
+    appState.currentUser = null;
+    applyDarkMode(false);
+
+    document.getElementById('app-container').classList.add('hidden');
+    document.getElementById('login-container').classList.remove('hidden');
+    document.getElementById('login-name').value = '';
+    document.getElementById('login-password').value = '';
+    document.getElementById('login-error').classList.add('hidden');
+    document.getElementById('user-name').value = '';
+
+    document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+    document.getElementById('calendar-screen').classList.remove('hidden');
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    const calendarNav = document.querySelector('.nav-item[onclick*="calendar"]');
+    if (calendarNav) calendarNav.classList.add('active');
+}
+
+function showApp() {
+    document.getElementById('login-container').classList.add('hidden');
+    document.getElementById('app-container').classList.remove('hidden');
+    loadUserData();
+
+    // Setup real-time listeners once
+    if (!appState.listenersReady) {
+        appState.listenersReady = true;
+        db.listenToGroups(() => {
+            if (!document.getElementById('groups-screen').classList.contains('hidden')) {
+                renderGroups();
+            }
+        });
+        db.listenToMeetings(() => {
+            if (!document.getElementById('plan-screen').classList.contains('hidden')) {
+                renderMeetings();
+            }
+            if (!document.getElementById('calendar-screen').classList.contains('hidden')) {
+                renderCalendar();
+            }
+        });
+    }
+}
+
+function applyDarkMode(enabled) {
+    appState.settings.darkMode = !!enabled;
+    document.body.classList.toggle('dark', appState.settings.darkMode);
+    document.getElementById('dark-mode-toggle').textContent = appState.settings.darkMode ? '☀️' : '🌙';
+}
+
+async function loadUserData() {
+    const user = await db.getUser(appState.currentUser);
+    if (user) {
+        document.getElementById('user-name').value = user.name || '';
+        applyDarkMode(!!user.darkMode);
+    }
+    renderCalendar();
+}
+
+// Load data
+async function loadData() {
+    await db.waitForFirebase();
+    const userId = localStorage.getItem('treffsyn-current-user-id');
+    if (userId) {
+        const user = await db.getUser(userId);
+        if (user) {
+            appState.currentUser = userId;
+            showApp();
+            return;
+        }
+    }
+    document.getElementById('login-container').classList.remove('hidden');
+}
+
+// Screen switching
+function switchScreen(screen) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+    document.getElementById(`${screen}-screen`).classList.remove('hidden');
+
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    event.currentTarget.classList.add('active');
+
+    if (screen === 'groups') renderGroups();
+    if (screen === 'plan') renderMeetings();
+    if (screen === 'calendar') renderCalendar();
+    if (screen === 'profile') renderBlockTimes();
+}
+
+// Dark Mode
+document.getElementById('dark-mode-toggle').addEventListener('click', async () => {
+    applyDarkMode(!appState.settings.darkMode);
+    if (appState.currentUser) {
+        await db.updateUser(appState.currentUser, { darkMode: appState.settings.darkMode });
+    }
+});
+
+// Name ändern
+document.getElementById('user-name').addEventListener('input', async (e) => {
+    const newName = e.target.value;
+    await db.updateUser(appState.currentUser, { name: newName });
+});
+
+// Zeitformat-Helfer (durchgehend 24-Stunden-Format)
+function formatTimeForDisplay(hhmm) {
+    if (!hhmm) return '';
+    const [h, m] = hhmm.split(':').map(Number);
+    return `${String(h).padStart(2, '0')}:${String(m || 0).padStart(2, '0')}`;
+}
+
+function buildMinuteOptions(selected = '00', placeholder = false) {
+    let opts = placeholder ? `<option value="" ${selected === '' ? 'selected' : ''}>--</option>` : '';
+    for (let m = 0; m < 60; m += 5) {
+        const val = String(m).padStart(2, '0');
+        opts += `<option value="${val}" ${val === selected ? 'selected' : ''}>${val}</option>`;
+    }
+    return opts;
+}
+
+function buildTimeSelectHTML(prefix, defaultHour24, defaultMinute = '00', options = {}) {
+    const { onChange = '', placeholder = false } = options;
+    const changeAttr = onChange ? ` onchange="${onChange}"` : '';
+    const minuteOpts = buildMinuteOptions(defaultMinute, placeholder);
+
+    let hourOpts = placeholder ? `<option value="" ${defaultHour24 === null ? 'selected' : ''}>--</option>` : '';
+    for (let h = 0; h < 24; h++) {
+        const val = String(h).padStart(2, '0');
+        hourOpts += `<option value="${val}" ${h === defaultHour24 ? 'selected' : ''}>${val}</option>`;
+    }
+
+    return `
+        <div class="time-select-row">
+            <select id="${prefix}-hour" class="input time-select"${changeAttr}>${hourOpts}</select>
+            <span>:</span>
+            <select id="${prefix}-minute" class="input time-select"${changeAttr}>${minuteOpts}</select>
+            <span class="time-select-suffix">Uhr</span>
+        </div>
+    `;
+}
+
+function parseTimeInputsTo24h(prefix) {
+    const hour = document.getElementById(`${prefix}-hour`)?.value;
+    const minute = document.getElementById(`${prefix}-minute`)?.value;
+    if (!hour || minute === '' || minute === undefined) return '';
+    return `${hour}:${minute}`;
+}
+
+const weekdayChipOrder = [
+    { day: 1, label: 'Mo' },
+    { day: 2, label: 'Di' },
+    { day: 3, label: 'Mi' },
+    { day: 4, label: 'Do' },
+    { day: 5, label: 'Fr' },
+    { day: 6, label: 'Sa' },
+    { day: 0, label: 'So' }
+];
+
+function formatCustomDays(days) {
+    if (!days || !days.length) return 'Bestimmte Tage';
+    return weekdayChipOrder
+        .filter(d => days.includes(d.day))
+        .map(d => d.label)
+        .join(', ');
+}
+
+function toggleWeekdayChip(btn) {
+    btn.classList.toggle('active');
+}
+
+// Blockzeiten
+function showAddBlockTimeModal() {
+    const today = new Date().toISOString().split('T')[0];
+    const weekdayChipsHTML = weekdayChipOrder.map(d =>
+        `<button type="button" class="weekday-chip" data-day="${d.day}" onclick="toggleWeekdayChip(this)">${d.label}</button>`
+    ).join('');
+
+    const html = `
+        <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
+            <div class="modal">
+                <div class="modal-header">
+                    <h3 class="modal-title">Blockzeit hinzufügen</h3>
+                    <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
+                </div>
+                <label class="input-label">Titel</label>
+                <input type="text" id="blocktime-title" class="input" placeholder="z.B. Arbeit, Sport">
+
+                <label class="input-label">Zeitraum</label>
+                <div class="day-type-selector">
+                    <button class="day-type-btn active" data-type="weekdays" onclick="selectDayType('weekdays')">Werktags</button>
+                    <button class="day-type-btn" data-type="weekend" onclick="selectDayType('weekend')">Wochenende</button>
+                    <button class="day-type-btn" data-type="custom" onclick="selectDayType('custom')">Bestimmte Tage</button>
+                    <button class="day-type-btn" data-type="date" onclick="selectDayType('date')">Datum</button>
+                </div>
+
+                <div id="days-selector" class="hidden">
+                    <label class="input-label">Wochentage</label>
+                    <div class="weekday-chips">${weekdayChipsHTML}</div>
+                </div>
+
+                <div id="date-selector" class="hidden">
+                    <label class="input-label">Datum</label>
+                    <input type="date" id="blocktime-date" class="input" min="${today}">
+                </div>
+
+                <label class="input-label">Von (Uhrzeit)</label>
+                ${buildTimeSelectHTML('blocktime-start', 9, '00')}
+
+                <label class="input-label">Bis (Uhrzeit)</label>
+                ${buildTimeSelectHTML('blocktime-end', 17, '00')}
+
+                <button class="btn btn-primary" onclick="addBlockTime()">Speichern</button>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', html);
+    window.selectedDayType = 'weekdays';
+}
+
+function selectDayType(type) {
+    window.selectedDayType = type;
+    document.querySelectorAll('.day-type-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.type === type);
+    });
+    document.getElementById('date-selector').classList.toggle('hidden', type !== 'date');
+    document.getElementById('days-selector').classList.toggle('hidden', type !== 'custom');
+}
+
+async function addBlockTime() {
+    const title = document.getElementById('blocktime-title').value.trim();
+    const startTime = parseTimeInputsTo24h('blocktime-start');
+    const endTime = parseTimeInputsTo24h('blocktime-end');
+
+    if (!title) return;
+
+    let blockTime = {
+        title,
+        startTime,
+        endTime,
+        type: window.selectedDayType
+    };
+
+    if (window.selectedDayType === 'date') {
+        blockTime.date = document.getElementById('blocktime-date').value;
+        if (!blockTime.date) return;
+    }
+
+    if (window.selectedDayType === 'custom') {
+        const days = Array.from(document.querySelectorAll('#days-selector .weekday-chip.active'))
+            .map(btn => parseInt(btn.dataset.day, 10));
+        if (days.length === 0) return;
+        blockTime.days = days;
+    }
+
+    await db.addBlockTime(appState.currentUser, blockTime);
+
+    document.querySelector('.modal-overlay').remove();
+    renderBlockTimes();
+}
+
+async function deleteBlockTime(id) {
+    await db.deleteBlockTime(appState.currentUser, id);
+    renderBlockTimes();
+}
+
+async function renderBlockTimes() {
+    const list = document.getElementById('block-times-list');
+    const userBlockTimes = await db.getUserBlockTimes(appState.currentUser);
+
+    if (userBlockTimes.length === 0) {
+        list.innerHTML = '<p class="empty-state">Keine Blockzeiten eingestellt</p>';
+        return;
+    }
+
+    list.innerHTML = userBlockTimes.map(bt => {
+        let dayText = '';
+        if (bt.type === 'weekdays') dayText = 'Werktags (Mo-Fr)';
+        else if (bt.type === 'weekend') dayText = 'Wochenende (Sa-So)';
+        else if (bt.type === 'custom') dayText = formatCustomDays(bt.days);
+        else if (bt.type === 'date') dayText = new Date(bt.date + 'T12:00:00').toLocaleDateString('de-DE');
+
+        return `
+            <div class="block-time-item">
+                <div class="block-time-info">
+                    <div class="block-time-title">${bt.title}</div>
+                    <div class="block-time-details">${dayText} · ${formatTimeForDisplay(bt.startTime)} - ${formatTimeForDisplay(bt.endTime)}</div>
+                </div>
+                <button class="delete-btn" onclick="deleteBlockTime('${bt.id}')">🗑️</button>
+            </div>
+        `;
+    }).join('');
+}
+
+// Gruppen
+function showCreateGroupModal() {
+    const html = `
+        <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
+            <div class="modal">
+                <div class="modal-header">
+                    <h3 class="modal-title">Neue Gruppe erstellen</h3>
+                    <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
+                </div>
+                <label class="input-label">Gruppenname</label>
+                <input type="text" id="group-name-input" class="input" placeholder="z.B. Freunde, Familie">
+                <label class="input-label">Beitritt</label>
+                <div class="join-mode-selector">
+                    <label class="join-mode-option">
+                        <input type="radio" name="join-mode" value="open" checked>
+                        <div>
+                            <strong>Sofort mit Code</strong>
+                            <span>Jeder mit dem Code wird sofort Mitglied</span>
+                        </div>
+                    </label>
+                    <label class="join-mode-option">
+                        <input type="radio" name="join-mode" value="approval">
+                        <div>
+                            <strong>Mit Bestätigung</strong>
+                            <span>Code + Zustimmung eines Admins nötig</span>
+                        </div>
+                    </label>
+                </div>
+                <button class="btn btn-primary" onclick="createGroup()">Erstellen</button>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function createGroup() {
+    const name = document.getElementById('group-name-input').value;
+    if (!name) return;
+
+    const joinMode = document.querySelector('input[name="join-mode"]:checked')?.value || 'open';
+    const { groupId, groupCode } = await db.createGroup(name, appState.currentUser, joinMode);
+
+    document.querySelector('.modal-overlay').remove();
+    showGroupCodeModal(groupCode, name);
+    renderGroups();
+}
+
+function showGroupCodeModal(code, groupName) {
+    const html = `
+        <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
+            <div class="modal">
+                <div class="modal-header">
+                    <h3 class="modal-title">🎉 Gruppe erstellt!</h3>
+                    <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
+                </div>
+                <p style="color: var(--text-secondary); margin-bottom: 16px;">
+                    Teile diesen Code mit deinen Freunden:
+                </p>
+                <div class="group-code">${code}</div>
+                <button class="btn btn-secondary" style="width: 100%;" onclick="copyGroupCode('${code}')">📋 Code kopieren</button>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+
+function copyGroupCode(code) {
+    navigator.clipboard.writeText(code).then(() => {
+        alert('Code kopiert! ✓');
+    });
+}
+
+function showJoinGroupModal() {
+    const html = `
+        <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
+            <div class="modal">
+                <div class="modal-header">
+                    <h3 class="modal-title">Gruppe beitreten</h3>
+                    <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
+                </div>
+                <label class="input-label">Gruppen-Code</label>
+                <input type="text" id="join-group-code" class="input" placeholder="6-stelliger Code" maxlength="6" style="text-transform: uppercase; text-align: center; font-size: 20px; letter-spacing: 2px;">
+                <button class="btn btn-primary" onclick="joinGroup()">Beitreten</button>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function joinGroup() {
+    const code = document.getElementById('join-group-code').value.toUpperCase();
+    if (!code) return;
+
+    const result = await db.joinGroup(code, appState.currentUser);
+
+    if (!result || result.status === 'not_found') {
+        alert('❌ Gruppe nicht gefunden. Prüfe den Code.');
+        return;
+    }
+
+    document.querySelector('.modal-overlay').remove();
+
+    if (result.status === 'already_member') {
+        alert(`Du bist bereits Mitglied von "${result.group.name}".`);
+    } else if (result.status === 'pending') {
+        alert(`📩 Anfrage gesendet. Ein Admin von "${result.group.name}" muss dich noch bestätigen.`);
+    } else if (result.status === 'joined') {
+        alert(`✓ Du bist der Gruppe "${result.group.name}" beigetreten!`);
+    }
+
+    renderGroups();
+}
+
+async function renderGroups() {
+    const list = document.getElementById('groups-list');
+    const userGroups = await db.getUserGroups(appState.currentUser);
+    const allUsers = await db.getAllUsers();
+
+    if (userGroups.length === 0) {
+        list.innerHTML = '<div class="empty-state"><h3>Noch keine Gruppen</h3><p>Erstelle eine Gruppe oder tritt einer bei</p></div>';
+        return;
+    }
+
+    list.innerHTML = userGroups.map(group => {
+        const memberNames = group.members
+            .map(userId => allUsers[userId]?.name || 'Unbekannt')
+            .join(', ');
+        const isAdmin = db.isGroupAdmin(group, appState.currentUser);
+        const pendingCount = Object.keys(group.pendingRequests || {}).length;
+        const modeLabel = group.joinMode === 'approval' ? 'Mit Bestätigung' : 'Sofort mit Code';
+        const adminBadge = isAdmin ? ' · Admin' : '';
+        const pendingBadge = isAdmin && pendingCount > 0 ? ` · ${pendingCount} Anfrage${pendingCount > 1 ? 'n' : ''}` : '';
+
+        return `
+            <div class="group-card" onclick="showGroupDetails('${group.id}')">
+                <h3>${group.name}</h3>
+                <span class="group-meta-badge">${modeLabel}${adminBadge}${pendingBadge}</span>
+                <p style="color: var(--text-secondary); margin: 8px 0;">Code: <span style="font-family: monospace; color: var(--accent); font-weight: 700;">${group.code}</span></p>
+                <p style="font-size: 14px; color: var(--text-secondary);">${memberNames}</p>
+            </div>
+        `;
+    }).join('');
+}
+
+async function showGroupDetails(groupId) {
+    const groups = await db.getAllGroups();
+    const group = groups[groupId];
+    if (!group) return;
+
+    const allUsers = await db.getAllUsers();
+    const isAdmin = db.isGroupAdmin(group, appState.currentUser);
+    const pendingIds = Object.keys(group.pendingRequests || {});
+    const modeLabel = group.joinMode === 'approval' ? 'Mit Bestätigung' : 'Sofort mit Code';
+
+    const membersHtml = group.members.map(userId => {
+        const name = allUsers[userId]?.name || 'Unbekannt';
+        const memberIsAdmin = group.admins.includes(userId);
+        const canRemove = isAdmin && userId !== appState.currentUser && !(memberIsAdmin && group.admins.length <= 1);
+        return `
+            <div class="member-row">
+                <div class="member-info">
+                    <span>${name}</span>
+                    ${memberIsAdmin ? '<span class="member-badge">Admin</span>' : ''}
+                </div>
+                ${canRemove ? `<button class="btn btn-danger btn-sm" onclick="event.stopPropagation(); removeGroupMember('${group.id}', '${userId}')">Entfernen</button>` : ''}
+            </div>
+        `;
+    }).join('');
+
+    const pendingHtml = isAdmin && pendingIds.length > 0 ? `
+        <p style="color: var(--text-secondary); margin: 16px 0 8px;">Offene Anfragen (${pendingIds.length}):</p>
+        ${pendingIds.map(userId => {
+            const name = allUsers[userId]?.name || 'Unbekannt';
+            return `
+                <div class="pending-row">
+                    <span>${name}</span>
+                    <div class="pending-actions">
+                        <button class="btn btn-success btn-sm" onclick="approveJoinRequest('${group.id}', '${userId}')">Annehmen</button>
+                        <button class="btn btn-danger btn-sm" onclick="rejectJoinRequest('${group.id}', '${userId}')">Ablehnen</button>
+                    </div>
+                </div>
+            `;
+        }).join('')}
+    ` : '';
+
+    const adminControls = isAdmin ? `
+        <label class="input-label">Gruppenname</label>
+        <input type="text" id="edit-group-name" class="input" value="${group.name.replace(/"/g, '&quot;')}">
+        <button class="btn btn-secondary" style="width: 100%; margin-bottom: 16px;" onclick="saveGroupName('${group.id}')">Name speichern</button>
+        <label class="input-label">Beitrittsmodus</label>
+        <select id="edit-join-mode" class="select" onchange="saveJoinMode('${group.id}', this.value)">
+            <option value="open" ${group.joinMode === 'open' ? 'selected' : ''}>Sofort mit Code</option>
+            <option value="approval" ${group.joinMode === 'approval' ? 'selected' : ''}>Code + Admin-Zustimmung</option>
+        </select>
+    ` : `
+        <p style="color: var(--text-secondary); margin-bottom: 12px;">Beitritt: ${modeLabel}</p>
+    `;
+
+    const html = `
+        <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
+            <div class="modal">
+                <div class="modal-header">
+                    <h3 class="modal-title">${group.name}</h3>
+                    <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
+                </div>
+                ${adminControls}
+                <p style="color: var(--text-secondary); margin-bottom: 8px;">Gruppen-Code:</p>
+                <div class="group-code">${group.code}</div>
+                <button class="btn btn-secondary" style="width: 100%; margin-bottom: 16px;" onclick="copyGroupCode('${group.code}')">📋 Code kopieren</button>
+                ${pendingHtml}
+                <p style="color: var(--text-secondary); margin: 16px 0 8px;">Mitglieder (${group.members.length}):</p>
+                <div style="margin-bottom: 16px;">${membersHtml}</div>
+                <button class="btn btn-danger" style="width: 100%;" onclick="leaveGroup('${group.id}')">Gruppe verlassen</button>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function saveGroupName(groupId) {
+    const name = document.getElementById('edit-group-name')?.value?.trim();
+    if (!name) return;
+    const ok = await db.updateGroupName(groupId, name, appState.currentUser);
+    if (!ok) {
+        alert('Name konnte nicht geändert werden.');
+        return;
+    }
+    document.querySelector('.modal-overlay')?.remove();
+    await renderGroups();
+    showGroupDetails(groupId);
+}
+
+async function saveJoinMode(groupId, joinMode) {
+    const ok = await db.updateJoinMode(groupId, joinMode, appState.currentUser);
+    if (!ok) {
+        alert('Beitrittsmodus konnte nicht geändert werden.');
+        return;
+    }
+    document.querySelector('.modal-overlay')?.remove();
+    await renderGroups();
+    showGroupDetails(groupId);
+}
+
+async function approveJoinRequest(groupId, userId) {
+    const ok = await db.approveJoinRequest(groupId, userId, appState.currentUser);
+    if (!ok) {
+        alert('Anfrage konnte nicht angenommen werden.');
+        return;
+    }
+    document.querySelector('.modal-overlay')?.remove();
+    await renderGroups();
+    showGroupDetails(groupId);
+}
+
+async function rejectJoinRequest(groupId, userId) {
+    const ok = await db.rejectJoinRequest(groupId, userId, appState.currentUser);
+    if (!ok) {
+        alert('Anfrage konnte nicht abgelehnt werden.');
+        return;
+    }
+    document.querySelector('.modal-overlay')?.remove();
+    await renderGroups();
+    showGroupDetails(groupId);
+}
+
+async function removeGroupMember(groupId, memberId) {
+    if (!confirm('Mitglied wirklich entfernen?')) return;
+    const result = await db.removeMember(groupId, memberId, appState.currentUser);
+    if (!result.ok) {
+        if (result.error === 'last_admin') {
+            alert('Der letzte Admin kann nicht entfernt werden.');
+        } else {
+            alert('Mitglied konnte nicht entfernt werden.');
+        }
+        return;
+    }
+    document.querySelector('.modal-overlay')?.remove();
+    await renderGroups();
+    showGroupDetails(groupId);
+}
+
+async function leaveGroup(groupId) {
+    if (!confirm('Gruppe wirklich verlassen?')) return;
+    const result = await db.leaveGroup(groupId, appState.currentUser);
+    if (!result.ok) {
+        if (result.error === 'last_admin') {
+            alert('Du bist der letzte Admin. Entferne zuerst die anderen Mitglieder, bevor du austrittst.');
+        } else {
+            alert('Gruppe konnte nicht verlassen werden.');
+        }
+        return;
+    }
+    document.querySelector('.modal-overlay')?.remove();
+    renderGroups();
+}
+
+// Meetings
+function timeToMinutes(timeStr) {
+    const [h, m] = timeStr.split(':').map(Number);
+    return h * 60 + (m || 0);
+}
+
+function isBlockTimeActiveOnDate(bt, dateStr) {
+    const dayOfWeek = new Date(dateStr + 'T12:00:00').getDay();
+    if (bt.type === 'weekdays') return dayOfWeek >= 1 && dayOfWeek <= 5;
+    if (bt.type === 'weekend') return dayOfWeek === 0 || dayOfWeek === 6;
+    if (bt.type === 'custom') return Array.isArray(bt.days) && bt.days.includes(dayOfWeek);
+    if (bt.type === 'date') return bt.date === dateStr;
+    return false;
+}
+
+function isUserBlockedAt(blockTimes, dateStr, timeStr) {
+    const meetingStart = timeToMinutes(timeStr);
+    const meetingEnd = meetingStart + 60;
+
+    return blockTimes.some(bt => {
+        if (!isBlockTimeActiveOnDate(bt, dateStr)) return false;
+        const blockStart = timeToMinutes(bt.startTime);
+        const blockEnd = timeToMinutes(bt.endTime);
+        return meetingStart < blockEnd && meetingEnd > blockStart;
+    });
+}
+
+async function updateMeetingAvailabilityPreview() {
+    const preview = document.getElementById('meeting-availability');
+    if (!preview) return;
+
+    const groupId = document.getElementById('meeting-group')?.value;
+    const date = document.getElementById('meeting-date')?.value;
+    const time = parseTimeInputsTo24h('meeting-time');
+
+    if (!groupId || !date || !time) {
+        preview.className = 'availability-preview';
+        preview.textContent = 'Datum und Uhrzeit wählen, um Verfügbarkeit zu prüfen';
+        return;
+    }
+
+    preview.className = 'availability-preview';
+    preview.textContent = 'Prüfe Verfügbarkeit…';
+
+    const groups = await db.getAllGroups();
+    const group = groups[groupId];
+    if (!group || !group.members) {
+        preview.textContent = 'Gruppe nicht gefunden';
+        return;
+    }
+
+    const members = group.members;
+    let blockedCount = 0;
+
+    await Promise.all(members.map(async (userId) => {
+        const blockTimes = await db.getUserBlockTimes(userId);
+        if (isUserBlockedAt(blockTimes, date, time)) {
+            blockedCount++;
+        }
+    }));
+
+    const total = members.length;
+    preview.textContent = `${blockedCount} von ${total} Personen geblockt`;
+
+    if (blockedCount === 0) {
+        preview.className = 'availability-preview ok';
+    } else if (blockedCount === total) {
+        preview.className = 'availability-preview bad';
+    } else {
+        preview.className = 'availability-preview warn';
+    }
+}
+
+function showCreateMeetingModal() {
+    db.getUserGroups(appState.currentUser).then(userGroups => {
+        if (userGroups.length === 0) {
+            alert('Erstelle zuerst eine Gruppe oder tritt einer bei!');
+            return;
+        }
+
+        const today = new Date().toISOString().split('T')[0];
+        const html = `
+            <div class="modal-overlay" onclick="if(event.target===this) this.remove()">
+                <div class="modal">
+                    <div class="modal-header">
+                        <h3 class="modal-title">Treffen planen</h3>
+                        <button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button>
+                    </div>
+                    <label class="input-label">Gruppe</label>
+                    <select id="meeting-group" class="select" onchange="updateMeetingAvailabilityPreview()">
+                        ${userGroups.map(g => `<option value="${g.id}">${g.name}</option>`).join('')}
+                    </select>
+                    <label class="input-label">Aktivität</label>
+                    <div class="activity-suggestions">
+                        ${ACTIVITY_SUGGESTIONS.map(act => `
+                            <div class="activity-chip" onclick="selectActivity('${act}')">${act}</div>
+                        `).join('')}
+                    </div>
+                    <input type="text" id="meeting-activity" class="input" placeholder="Oder eigene Aktivität eingeben">
+                    <label class="input-label">Datum</label>
+                    <input type="date" id="meeting-date" class="input" min="${today}" onchange="updateMeetingAvailabilityPreview()">
+                    <label class="input-label">Uhrzeit</label>
+                    ${buildTimeSelectHTML('meeting-time', null, '', { onChange: 'updateMeetingAvailabilityPreview()', placeholder: true })}
+                    <div id="meeting-availability" class="availability-preview">Datum und Uhrzeit wählen, um Verfügbarkeit zu prüfen</div>
+                    <button class="btn btn-primary" onclick="createMeeting()">Erstellen</button>
+                </div>
+            </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', html);
+    });
+}
+
+function selectActivity(activity) {
+    document.getElementById('meeting-activity').value = activity;
+}
+
+async function createMeeting() {
+    const groupId = document.getElementById('meeting-group').value;
+    const activity = document.getElementById('meeting-activity').value;
+    const date = document.getElementById('meeting-date').value;
+    const time = parseTimeInputsTo24h('meeting-time');
+
+    if (!activity || !date || !time) return;
+
+    await db.createMeeting(groupId, activity, date, time, appState.currentUser);
+
+    document.querySelector('.modal-overlay').remove();
+    renderMeetings();
+    renderCalendar();
+}
+
+async function respondToMeeting(meetingId, status) {
+    const commentInput = document.getElementById('meeting-comment-' + meetingId);
+    const comment = commentInput ? commentInput.value.trim() : '';
+    await db.respondToMeeting(meetingId, appState.currentUser, status, comment);
+    renderMeetings();
+}
+
+async function deleteMeeting(meetingId) {
+    if (!confirm('Dieses Treffen wirklich löschen?')) return;
+    const result = await db.deleteMeeting(meetingId, appState.currentUser);
+    if (!result.ok) {
+        alert(result.error === 'no_permission'
+            ? 'Nur der Terminersteller kann dieses Treffen löschen.'
+            : 'Treffen konnte nicht gelöscht werden.');
+        return;
+    }
+    renderMeetings();
+    renderCalendar();
+}
+
+async function renderMeetings() {
+    const list = document.getElementById('meetings-list');
+    const userMeetings = await db.getUserMeetings(appState.currentUser);
+    const allGroups = await db.getAllGroups();
+    const allUsers = await db.getAllUsers();
+
+    if (userMeetings.length === 0) {
+        list.innerHTML = '<div class="card"><p class="empty-state">Keine geplanten Treffen</p></div>';
+        return;
+    }
+
+    list.innerHTML = '<div class="card"><h2 class="card-title">Geplante Treffen</h2>' +
+        userMeetings.sort((a, b) => new Date(a.date) - new Date(b.date)).map(meeting => {
+            const group = allGroups[meeting.groupId];
+            const members = group?.members || [];
+            const responses = meeting.responses || {};
+            const accepted = members.filter(id => responses[id]?.status === 'accepted').length;
+            const declined = members.filter(id => responses[id]?.status === 'declined').length;
+            const pending = Math.max(0, members.length - accepted - declined);
+            const myResponse = responses[appState.currentUser];
+            const isCreator = meeting.createdBy === appState.currentUser;
+
+            const responseListHtml = members.map(userId => {
+                const name = allUsers[userId]?.name || 'Unbekannt';
+                const resp = responses[userId];
+                if (!resp) {
+                    return `<li>${name}: <span>offen</span></li>`;
+                }
+                const statusLabel = resp.status === 'accepted' ? 'zugesagt' : 'abgesagt';
+                const statusClass = resp.status === 'accepted' ? 'status-accepted' : 'status-declined';
+                const commentHtml = resp.comment
+                    ? ` — <em>${resp.comment.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</em>`
+                    : '';
+                return `<li>${name}: <span class="${statusClass}">${statusLabel}</span>${commentHtml}</li>`;
+            }).join('');
+
+            const myStatusHtml = myResponse
+                ? `<div class="meeting-my-status ${myResponse.status}">Deine Antwort: ${myResponse.status === 'accepted' ? 'Zugesagt' : 'Abgesagt'}${myResponse.comment ? ' — ' + myResponse.comment.replace(/</g, '&lt;').replace(/>/g, '&gt;') : ''}</div>`
+                : '<div class="meeting-my-status">Deine Antwort: offen</div>';
+
+            const deleteBtn = isCreator
+                ? `<button class="delete-btn" title="Treffen löschen" onclick="deleteMeeting('${meeting.id}')">🗑️</button>`
+                : '';
+
+            return `
+                <div class="meeting-item">
+                    <div class="meeting-item-header">
+                        <h3>${meeting.activity}</h3>
+                        ${deleteBtn}
+                    </div>
+                    <p style="color: var(--accent); font-weight: 600;">${group?.name || 'Unbekannte Gruppe'}</p>
+                    <p>${new Date(meeting.date).toLocaleDateString('de-DE')} um ${meeting.time}</p>
+                    <p class="meeting-responses-summary">${accepted} zugesagt · ${declined} abgesagt · ${pending} offen</p>
+                    <ul class="meeting-response-list">${responseListHtml}</ul>
+                    ${myStatusHtml}
+                    <div class="meeting-response-actions">
+                        <input type="text" id="meeting-comment-${meeting.id}" class="input" placeholder="Optionaler Kommentar" value="${(myResponse?.comment || '').replace(/"/g, '&quot;')}">
+                        <div class="btn-row">
+                            <button class="btn btn-success btn-sm" onclick="respondToMeeting('${meeting.id}', 'accepted')">Zusagen</button>
+                            <button class="btn btn-danger btn-sm" onclick="respondToMeeting('${meeting.id}', 'declined')">Absagen</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('') + '</div>';
+}
+
+// Kalender
+function toDateStr(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+function parseDateStr(dateStr) {
+    return new Date(dateStr + 'T12:00:00');
+}
+
+function getMonday(d) {
+    const date = new Date(d);
+    date.setHours(12, 0, 0, 0);
+    const day = date.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    date.setDate(date.getDate() + diff);
+    return date;
+}
+
+function addDays(d, n) {
+    const date = new Date(d);
+    date.setDate(date.getDate() + n);
+    return date;
+}
+
+function meetingEndTime(timeStr) {
+    const mins = timeToMinutes(timeStr) + 60;
+    const h = Math.floor(mins / 60) % 24;
+    const m = mins % 60;
+    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+}
+
+function expandBlockTimesToEvents(blockTimes, userId, userName, rangeStart, rangeEnd) {
+    const events = [];
+    const d = new Date(rangeStart);
+    d.setHours(12, 0, 0, 0);
+    const end = new Date(rangeEnd);
+    end.setHours(12, 0, 0, 0);
+
+    while (d <= end) {
+        const dateStr = toDateStr(d);
+        blockTimes.forEach(bt => {
+            if (!isBlockTimeActiveOnDate(bt, dateStr)) return;
+            const title = (userName && userId !== appState.currentUser)
+                ? `${userName} – ${bt.title}`
+                : bt.title;
+            events.push({
+                id: `${bt.id}-${dateStr}`,
+                kind: 'block',
+                title,
+                date: dateStr,
+                startTime: bt.startTime,
+                endTime: bt.endTime,
+                userId,
+                colorClass: 'blocktime'
+            });
+        });
+        d.setDate(d.getDate() + 1);
+    }
+    return events;
+}
+
+function meetingToEvent(m) {
+    return {
+        id: m.id,
+        kind: 'meeting',
+        title: m.activity,
+        date: m.date,
+        startTime: m.time,
+        endTime: meetingEndTime(m.time),
+        groupId: m.groupId,
+        colorClass: 'meeting'
+    };
+}
+
+function getVisibleRange() {
+    const view = appState.calendarView;
+    const cur = new Date(appState.currentDate);
+    cur.setHours(12, 0, 0, 0);
+
+    if (view === 'day') {
+        return { start: new Date(cur), end: new Date(cur) };
+    }
+    if (view === 'week' || view === 'agenda') {
+        const monday = getMonday(cur);
+        const end = view === 'agenda' ? addDays(monday, 13) : addDays(monday, 6);
+        return { start: monday, end };
+    }
+    // month
+    const first = new Date(cur.getFullYear(), cur.getMonth(), 1, 12, 0, 0);
+    const last = new Date(cur.getFullYear(), cur.getMonth() + 1, 0, 12, 0, 0);
+    const gridStart = getMonday(first);
+    const gridEnd = addDays(getMonday(last), 6);
+    return { start: gridStart, end: gridEnd };
+}
+
+async function ensureCalendarGroupSelected() {
+    const userGroups = await db.getUserGroups(appState.currentUser);
+    const wrap = document.getElementById('calendar-group-select-wrap');
+    const select = document.getElementById('calendar-group-select');
+
+    if (appState.calendarFilter === 'group') {
+        wrap.classList.remove('hidden');
+    } else {
+        wrap.classList.add('hidden');
+    }
+
+    if (userGroups.length === 0) {
+        select.innerHTML = '<option value="">Keine Gruppe</option>';
+        appState.selectedGroupId = null;
+        return userGroups;
+    }
+
+    if (!appState.selectedGroupId || !userGroups.some(g => g.id === appState.selectedGroupId)) {
+        appState.selectedGroupId = userGroups[0].id;
+    }
+
+    select.innerHTML = userGroups.map(g =>
+        `<option value="${g.id}" ${g.id === appState.selectedGroupId ? 'selected' : ''}>${g.name}</option>`
+    ).join('');
+
+    return userGroups;
+}
+
+async function getCalendarEvents(rangeStart, rangeEnd) {
+    const startStr = toDateStr(rangeStart);
+    const endStr = toDateStr(rangeEnd);
+    const events = [];
+    const filter = appState.calendarFilter;
+    const userId = appState.currentUser;
+
+    if (filter === 'mine') {
+        const meetings = await db.getUserMeetings(userId);
+        meetings
+            .filter(m => m.date >= startStr && m.date <= endStr)
+            .filter(m => m.createdBy === userId || m.responses?.[userId]?.status === 'accepted')
+            .forEach(m => events.push(meetingToEvent(m)));
+
+        const blockTimes = await db.getUserBlockTimes(userId);
+        events.push(...expandBlockTimesToEvents(blockTimes, userId, null, rangeStart, rangeEnd));
+    } else if (filter === 'group') {
+        if (!appState.selectedGroupId) return events;
+
+        const groups = await db.getAllGroups();
+        const group = groups[appState.selectedGroupId];
+        if (!group) return events;
+
+        const allMeetings = await db.getAllMeetings();
+        Object.values(allMeetings)
+            .filter(m => m.groupId === appState.selectedGroupId && m.date >= startStr && m.date <= endStr)
+            .forEach(m => events.push(meetingToEvent(m)));
+
+        const users = await db.getAllUsers();
+        const members = group.members || [];
+        await Promise.all(members.map(async (memberId) => {
+            const blockTimes = await db.getUserBlockTimes(memberId);
+            const name = users[memberId]?.name || 'Unbekannt';
+            events.push(...expandBlockTimesToEvents(blockTimes, memberId, name, rangeStart, rangeEnd));
+        }));
+    } else if (filter === 'meetings') {
+        const meetings = await db.getUserMeetings(userId);
+        meetings
+            .filter(m => m.date >= startStr && m.date <= endStr)
+            .forEach(m => events.push(meetingToEvent(m)));
+    }
+
+    events.sort((a, b) => {
+        if (a.date !== b.date) return a.date.localeCompare(b.date);
+        return (a.startTime || '').localeCompare(b.startTime || '');
+    });
+    return events;
+}
+
+function updateCalendarTitle() {
+    const title = document.getElementById('calendar-title');
+    const cur = appState.currentDate;
+    const view = appState.calendarView;
+
+    if (view === 'day') {
+        title.textContent = cur.toLocaleDateString('de-DE', {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric'
+        });
+    } else if (view === 'week') {
+        const monday = getMonday(cur);
+        const sunday = addDays(monday, 6);
+        title.textContent = `${monday.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })} – ${sunday.toLocaleDateString('de-DE', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+    } else if (view === 'month') {
+        title.textContent = cur.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
+    } else {
+        const { start, end } = getVisibleRange();
+        title.textContent = `${start.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' })} – ${end.toLocaleDateString('de-DE', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+    }
+}
+
+function syncCalendarToggleUI() {
+    document.querySelectorAll('#calendar-filter-toggle .cal-seg-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === appState.calendarFilter);
+    });
+    document.querySelectorAll('#calendar-view-toggle .cal-seg-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.view === appState.calendarView);
+    });
+}
+
+function setCalendarFilter(filter) {
+    appState.calendarFilter = filter;
+    syncCalendarToggleUI();
+    renderCalendar();
+}
+
+function setCalendarView(view) {
+    appState.calendarView = view;
+    syncCalendarToggleUI();
+    renderCalendar();
+}
+
+function setCalendarGroup(groupId) {
+    appState.selectedGroupId = groupId || null;
+    renderCalendar();
+}
+
+function navigateCalendar(delta) {
+    const view = appState.calendarView;
+    if (view === 'day') {
+        appState.currentDate.setDate(appState.currentDate.getDate() + delta);
+    } else if (view === 'week' || view === 'agenda') {
+        appState.currentDate.setDate(appState.currentDate.getDate() + delta * 7);
+    } else if (view === 'month') {
+        appState.currentDate.setMonth(appState.currentDate.getMonth() + delta);
+    }
+    renderCalendar();
+}
+
+function changeDay(delta) {
+    navigateCalendar(delta);
+}
+
+function renderDayView(events, dateStr) {
+    const dayEvents = events.filter(e => e.date === dateStr);
+    let timelineHTML = '<div class="card"><h2 class="card-title">Tagesübersicht</h2><div class="timeline">';
+
+    for (let hour = 0; hour < 24; hour++) {
+        const hourStr = formatTimeForDisplay(String(hour).padStart(2, '0') + ':00');
+        let eventsHTML = '';
+
+        dayEvents.forEach(ev => {
+            if (ev.kind === 'block') {
+                const startHour = parseInt(ev.startTime.split(':')[0], 10);
+                const endHour = parseInt(ev.endTime.split(':')[0], 10);
+                if (hour >= startHour && hour < endHour) {
+                    eventsHTML += `<div class="event-block blocktime">${ev.title}</div>`;
+                }
+            } else {
+                const meetingHour = parseInt(ev.startTime.split(':')[0], 10);
+                if (hour === meetingHour) {
+                    eventsHTML += `<div class="event-block meeting">${ev.title}</div>`;
+                }
+            }
+        });
+
+        timelineHTML += `
+            <div class="timeline-hour">
+                <div class="hour-label">${hourStr}</div>
+                <div class="hour-events">${eventsHTML || '<span style="color: var(--text-secondary); font-size: 12px;">Frei</span>'}</div>
+            </div>
+        `;
+    }
+
+    timelineHTML += '</div></div>';
+    return timelineHTML;
+}
+
+function renderWeekView(events, rangeStart) {
+    const todayStr = toDateStr(new Date());
+    let html = '<div class="card"><h2 class="card-title">Wochenübersicht</h2><div class="week-grid">';
+
+    for (let i = 0; i < 7; i++) {
+        const day = addDays(rangeStart, i);
+        const dateStr = toDateStr(day);
+        const dayEvents = events.filter(e => e.date === dateStr);
+        const isToday = dateStr === todayStr;
+        const label = day.toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'short' });
+
+        html += `
+            <div class="week-day" onclick="openCalendarDay('${dateStr}')">
+                <div class="week-day-header${isToday ? ' today' : ''}">${label}</div>
+                <div class="week-day-events">
+                    ${dayEvents.length === 0
+                        ? '<span style="font-size:11px;color:var(--text-secondary);">–</span>'
+                        : dayEvents.map(ev =>
+                            `<div class="week-event-chip ${ev.colorClass}" title="${ev.title}">${ev.startTime ? formatTimeForDisplay(ev.startTime) + ' ' : ''}${ev.title}</div>`
+                        ).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    html += '</div></div>';
+    return html;
+}
+
+function renderMonthView(events, rangeStart, rangeEnd) {
+    const todayStr = toDateStr(new Date());
+    const curMonth = appState.currentDate.getMonth();
+    const weekdays = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+
+    let html = '<div class="card"><h2 class="card-title">Monatsübersicht</h2><div class="month-grid">';
+    html += weekdays.map(w => `<div class="month-weekday-label">${w}</div>`).join('');
+
+    let d = new Date(rangeStart);
+    d.setHours(12, 0, 0, 0);
+    const end = new Date(rangeEnd);
+    end.setHours(12, 0, 0, 0);
+
+    while (d <= end) {
+        const dateStr = toDateStr(d);
+        const dayEvents = events.filter(e => e.date === dateStr);
+        const other = d.getMonth() !== curMonth;
+        const isToday = dateStr === todayStr;
+        const dots = dayEvents.slice(0, 8).map(ev =>
+            `<span class="month-dot ${ev.colorClass}"></span>`
+        ).join('');
+
+        html += `
+            <div class="month-day${other ? ' other-month' : ''}${isToday ? ' today' : ''}" onclick="openCalendarDay('${dateStr}')">
+                <div class="month-day-num">${d.getDate()}</div>
+                <div class="month-day-dots">${dots}</div>
+            </div>
+        `;
+        d.setDate(d.getDate() + 1);
+    }
+
+    html += '</div></div>';
+    return html;
+}
+
+function renderAgendaView(events) {
+    if (events.length === 0) {
+        return '<div class="card"><p class="empty-state">Keine Termine in diesem Zeitraum</p></div>';
+    }
+
+    let html = '<div class="card"><h2 class="card-title">Terminübersicht</h2><div class="agenda-list">';
+    html += events.map(ev => {
+        const dateLabel = parseDateStr(ev.date).toLocaleDateString('de-DE', {
+            weekday: 'short',
+            day: 'numeric',
+            month: 'short'
+        });
+        const timeLabel = ev.kind === 'block'
+            ? `${formatTimeForDisplay(ev.startTime)} – ${formatTimeForDisplay(ev.endTime)}`
+            : formatTimeForDisplay(ev.startTime);
+        const typeLabel = ev.kind === 'meeting' ? 'Treffen' : 'Blockzeit';
+
+        return `
+            <div class="agenda-item ${ev.colorClass}">
+                <div class="agenda-date">${dateLabel}</div>
+                <div class="agenda-body">
+                    <div class="agenda-title">${ev.title}</div>
+                    <div class="agenda-meta">${typeLabel} · ${timeLabel}</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    html += '</div></div>';
+    return html;
+}
+
+function openCalendarDay(dateStr) {
+    appState.currentDate = parseDateStr(dateStr);
+    appState.calendarView = 'day';
+    syncCalendarToggleUI();
+    renderCalendar();
+}
+
+async function renderCalendar() {
+    const content = document.getElementById('calendar-content');
+    syncCalendarToggleUI();
+    await ensureCalendarGroupSelected();
+    updateCalendarTitle();
+
+    if (appState.calendarFilter === 'group' && !appState.selectedGroupId) {
+        content.innerHTML = '<div class="card"><p class="empty-state">Tritt einer Gruppe bei, um Gruppentermine zu sehen</p></div>';
+        return;
+    }
+
+    const { start, end } = getVisibleRange();
+    const events = await getCalendarEvents(start, end);
+    const view = appState.calendarView;
+
+    if (view === 'day') {
+        content.innerHTML = renderDayView(events, toDateStr(appState.currentDate));
+    } else if (view === 'week') {
+        content.innerHTML = renderWeekView(events, start);
+    } else if (view === 'month') {
+        content.innerHTML = renderMonthView(events, start, end);
+    } else {
+        content.innerHTML = renderAgendaView(events);
+    }
+}
+
+// Initial laden
+loadData();
+
+// Globale Handler für onclick-Attribute im HTML
+Object.assign(window, {
+    addBlockTime,
+    addDays,
+    applyDarkMode,
+    approveJoinRequest,
+    buildMinuteOptions,
+    buildTimeSelectHTML,
+    changeDay,
+    copyGroupCode,
+    createGroup,
+    createMeeting,
+    deleteBlockTime,
+    deleteMeeting,
+    ensureCalendarGroupSelected,
+    expandBlockTimesToEvents,
+    formatCustomDays,
+    formatTimeForDisplay,
+    getCalendarEvents,
+    getMonday,
+    getVisibleRange,
+    isBlockTimeActiveOnDate,
+    isUserBlockedAt,
+    joinGroup,
+    leaveGroup,
+    loadData,
+    loadUserData,
+    login,
+    logout,
+    meetingEndTime,
+    meetingToEvent,
+    navigateCalendar,
+    openCalendarDay,
+    parseDateStr,
+    parseTimeInputsTo24h,
+    rejectJoinRequest,
+    removeGroupMember,
+    renderAgendaView,
+    renderBlockTimes,
+    renderCalendar,
+    renderDayView,
+    renderGroups,
+    renderMeetings,
+    renderMonthView,
+    renderWeekView,
+    respondToMeeting,
+    saveGroupName,
+    saveJoinMode,
+    selectActivity,
+    selectDayType,
+    setCalendarFilter,
+    setCalendarGroup,
+    setCalendarView,
+    showAddBlockTimeModal,
+    showApp,
+    showCreateGroupModal,
+    showCreateMeetingModal,
+    showGroupCodeModal,
+    showGroupDetails,
+    showJoinGroupModal,
+    switchScreen,
+    syncCalendarToggleUI,
+    timeToMinutes,
+    toDateStr,
+    toggleWeekdayChip,
+    updateCalendarTitle,
+    updateMeetingAvailabilityPreview
+});
